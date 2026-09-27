@@ -13,11 +13,14 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * 顯示在「看不見的虛擬螢幕」上的瀏覽器。
@@ -36,6 +39,8 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 虛擬螢幕上的視窗不能搶輸入焦點,否則 App 上方網址列叫不出鍵盤
+        window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         root = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
 
         webView = WebView(context)
@@ -129,6 +134,86 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         e.recycle()
     }
 
+    // ---------------- 影片控制(直接操作網頁中的 <video>) ----------------
+
+    class VideoStatus(val current: Double, val duration: Double, val paused: Boolean)
+
+    private fun js(code: String, cb: ((String?) -> Unit)? = null) {
+        if (!::webView.isInitialized) { cb?.invoke(null); return }
+        webView.evaluateJavascript(code) { cb?.invoke(it) }
+    }
+
+    /** 回傳 null = 找不到影片 */
+    fun videoStatus(cb: (VideoStatus?) -> Unit) {
+        js("(function(){$FIND_VIDEO if(!v)return null;" +
+                "return [v.currentTime,isFinite(v.duration)?v.duration:0,v.paused?1:0];})()") { r ->
+            val st = try {
+                if (r == null || r == "null") null else JSONArray(r).let {
+                    VideoStatus(it.optDouble(0, 0.0), it.optDouble(1, 0.0), it.optInt(2) == 1)
+                }
+            } catch (e: Exception) { null }
+            cb(st)
+        }
+    }
+
+    /** 快進/倒退秒數;找不到影片時改用左右側雙擊 */
+    fun seekBy(sec: Int) {
+        js("(function(){$FIND_VIDEO if(!v)return false;" +
+                "v.currentTime=Math.max(0,v.currentTime+($sec));return true;})()") { r ->
+            if (r != "true") tap(MainActivity.SRC_W * (if (sec < 0) 0.2f else 0.8f), MainActivity.SRC_H * 0.5f, 2)
+        }
+    }
+
+    fun seekTo(fraction: Float) {
+        js("(function(){$FIND_VIDEO if(!v||!isFinite(v.duration))return false;" +
+                "v.currentTime=v.duration*$fraction;return true;})()")
+    }
+
+    /** 播放/暫停;找不到影片時點一下畫面中央 */
+    fun togglePlay() {
+        js("(function(){$FIND_VIDEO if(!v)return false;" +
+                "if(v.paused)v.play();else v.pause();return true;})()") { r ->
+            if (r != "true") tap(MainActivity.SRC_W * 0.5f, MainActivity.SRC_H * 0.5f, 1)
+        }
+    }
+
+    // ---------------- 網頁文字輸入框 ----------------
+
+    /** (x, y) 是否點在文字輸入框上;是的話回呼 (目前內容, 提示文字, 是否密碼) */
+    fun inputAt(x: Float, y: Float, cb: (String, String, Boolean) -> Unit) {
+        js("(function(x,y){var d=window.devicePixelRatio||1,vv=window.visualViewport,s=vv?vv.scale:1;" +
+                "var cx=(vv?vv.offsetLeft:0)+x/(d*s),cy=(vv?vv.offsetTop:0)+y/(d*s);" +
+                "var e=document.elementFromPoint(cx,cy);" +
+                "while(e&&e.shadowRoot){var i=e.shadowRoot.elementFromPoint(cx,cy);if(!i||i===e)break;e=i;}" +
+                "if(!e)return null;var t=e.tagName,ty=(e.type||'').toLowerCase();" +
+                "var ok=t==='TEXTAREA'||e.isContentEditable||" +
+                "(t==='INPUT'&&/^(text|search|email|url|tel|number|password|)$/.test(ty));" +
+                "if(!ok)return null;window.__vrInput=e;" +
+                "return {v:(e.isContentEditable?e.textContent:e.value)||'',p:e.placeholder||e.getAttribute('aria-label')||'',pw:ty==='password'};" +
+                "})($x,$y)") { r ->
+            if (r == null || r == "null") return@js
+            try {
+                val o = JSONObject(r)
+                cb(o.optString("v"), o.optString("p"), o.optBoolean("pw"))
+            } catch (e: Exception) {}
+        }
+    }
+
+    /** 把文字填進剛才點到的輸入框;submit = 同時按 Enter 送出 */
+    fun setInputText(text: String, submit: Boolean) {
+        js("(function(s,sub){var e=window.__vrInput;if(!e)return;e.focus();" +
+                "if(e.isContentEditable){e.textContent=s;}else{" +
+                "var pr=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;" +
+                "Object.getOwnPropertyDescriptor(pr,'value').set.call(e,s);}" +
+                "e.dispatchEvent(new Event('input',{bubbles:true}));" +
+                "e.dispatchEvent(new Event('change',{bubbles:true}));" +
+                "if(!sub)return;var o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};" +
+                "var free=e.dispatchEvent(new KeyboardEvent('keydown',o));" +
+                "e.dispatchEvent(new KeyboardEvent('keypress',o));e.dispatchEvent(new KeyboardEvent('keyup',o));" +
+                "if(free&&e.form){if(e.form.requestSubmit)e.form.requestSubmit();else e.form.submit();}" +
+                "})(${JSONObject.quote(text)},$submit)")
+    }
+
     fun release() {
         if (::webView.isInitialized) {
             webView.stopLoading()
@@ -136,3 +221,8 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         }
     }
 }
+
+// 找出頁面上最主要的影片:正在播放的優先,其次面積最大的
+private const val FIND_VIDEO =
+    "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
+    "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"

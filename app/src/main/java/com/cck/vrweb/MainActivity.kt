@@ -1,6 +1,7 @@
 package com.cck.vrweb
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.SurfaceTexture
@@ -17,6 +18,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.text.InputType
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.InputDevice
@@ -32,10 +35,12 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
 
@@ -47,6 +52,19 @@ class MainActivity : Activity(), SensorEventListener {
         const val SRC_H = 720
         const val SRC_DPI = 240
         const val GAZE_FOV = 1.0f   // 頭轉約 57 度 = 游標從畫面一端到另一端
+
+        // 低頭控制面板(單位:弧度,相對於「正前方」)
+        const val MENU_OPEN = 0.35f      // 低頭約 20 度打開
+        const val MENU_CLOSE = 0.26f     // 抬頭回到約 15 度內關閉
+        const val MENU_Y_START = 0.30f   // 面板內游標上下對應的低頭角度範圍
+        const val MENU_Y_RANGE = 0.40f
+        const val DWELL_MS = 1200L       // 看著按鈕多久觸發
+        const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
+        const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
+
+        // 游標自動隱藏
+        const val CURSOR_MOVE = 0.05f    // 頭轉超過約 3 度才顯示游標
+        const val CURSOR_HIDE_MS = 2500L // 頭不動多久後隱藏
     }
 
     private lateinit var prefs: SharedPreferences
@@ -66,6 +84,26 @@ class MainActivity : Activity(), SensorEventListener {
     private var vrMode = false
     private var baseYaw = Float.NaN
     private var basePitch = 0f
+
+    // 低頭控制面板
+    private val menu = VrMenu()
+    private var menuOpen = false
+    private var hoverStart = 0L
+    private var hoverAnchorX = 0f
+    private var dwellDone = false
+    private var lastPanelDraw = 0L
+    private var lastStatusPoll = 0L
+
+    // 游標自動隱藏
+    private var lastMoveAt = 0L
+    private var anchorYaw = 0f
+    private var anchorPitch = 0f
+
+    // 2D 模式點擊偵測(用來判斷是否點到網頁文字框)
+    private var downX = 0f
+    private var downY = 0f
+    private var downAt = 0L
+    private var inputDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,7 +140,11 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             imeOptions = EditorInfo.IME_ACTION_GO
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setSelectAllOnFocus(true)
             setOnEditorActionListener { _, _, _ -> go(); true }
+            setOnClickListener { showKeyboard() }
+            setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -111,6 +153,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("←") { presentation?.handleBack() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("前往") { go() })
+            addView(button("YouTube") { openUrl("https://m.youtube.com") })
             addView(button("VR") { setVr(true) })
         }
 
@@ -173,8 +216,21 @@ class MainActivity : Activity(), SensorEventListener {
             t.contains(".") && !t.contains(" ") -> "https://$t"
             else -> "https://www.google.com/search?q=" + Uri.encode(t)
         }
+        openUrl(url)
+    }
+
+    private fun openUrl(url: String) {
+        urlInput.setText(url)
         presentation?.loadUrl(url)
         hideKeyboard()
+    }
+
+    private fun showKeyboard() {
+        urlInput.requestFocus()
+        urlInput.post {
+            (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                .showSoftInput(urlInput, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun hideKeyboard() {
@@ -229,7 +285,9 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showCursor = on
         renderer.cursorX = 0.5f
         renderer.cursorY = 0.5f
-        baseYaw = Float.NaN  // 下一筆感測器資料當作正前方
+        recenter()
+        lastMoveAt = SystemClock.uptimeMillis()
+        setMenu(false)
         topBar.visibility = if (on) View.GONE else View.VISIBLE
         bottomBar.visibility = if (on) View.GONE else View.VISIBLE
         hideKeyboard()
@@ -242,9 +300,12 @@ class MainActivity : Activity(), SensorEventListener {
         // VR 模式:點一下 = 在游標處點擊;點兩下 = 游標處雙擊;長按 = 游標重新置中
         gesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean { tapAtCursor(1); return true }
-            override fun onDoubleTap(e: MotionEvent): Boolean { tapAtCursor(2); return true }
-            override fun onLongPress(e: MotionEvent) { baseYaw = Float.NaN }
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean { onSelect(); return true }
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (!menuOpen) tapAtCursor(2)
+                return true
+            }
+            override fun onLongPress(e: MotionEvent) { recenter() }
         })
 
         glView.setOnTouchListener { _, ev ->
@@ -265,6 +326,60 @@ class MainActivity : Activity(), SensorEventListener {
         e.source = InputDevice.SOURCE_TOUCHSCREEN
         presentation?.dispatchTouch(e)
         e.recycle()
+
+        // 點一下(不是滑動)網頁文字框 → 跳出輸入視窗,用手機鍵盤打字
+        if (action == MotionEvent.ACTION_DOWN) {
+            downX = ev.x; downY = ev.y; downAt = ev.eventTime
+        } else if (action == MotionEvent.ACTION_UP &&
+            abs(ev.x - downX) < 30 && abs(ev.y - downY) < 30 && ev.eventTime - downAt < 600) {
+            handler.postDelayed({
+                if (vrMode || inputDialog?.isShowing == true) return@postDelayed
+                presentation?.inputAt(x, y) { value, hint, password -> askWebInput(value, hint, password) }
+            }, 250)
+        }
+    }
+
+    private fun askWebInput(value: String, hint: String, password: Boolean) {
+        if (vrMode || inputDialog?.isShowing == true) return
+        val et = EditText(this).apply {
+            setSingleLine()
+            setText(value)
+            setSelection(text.length)
+            this.hint = hint
+            inputType = InputType.TYPE_CLASS_TEXT or
+                    (if (password) InputType.TYPE_TEXT_VARIATION_PASSWORD else 0)
+            imeOptions = EditorInfo.IME_ACTION_GO
+        }
+        val box = FrameLayout(this).apply {
+            setPadding(48, 24, 48, 0)
+            addView(et)
+        }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("輸入文字")
+            .setView(box)
+            .setPositiveButton("送出") { _, _ -> presentation?.setInputText(et.text.toString(), true) }
+            .setNeutralButton("只填入") { _, _ -> presentation?.setInputText(et.text.toString(), false) }
+            .setNegativeButton("取消", null)
+            .create()
+        et.setOnEditorActionListener { _, _, _ ->
+            presentation?.setInputText(et.text.toString(), true)
+            dlg.dismiss()
+            true
+        }
+        dlg.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        dlg.setOnDismissListener { hideSystemBars() }
+        inputDialog = dlg
+        dlg.show()
+        et.requestFocus()
+    }
+
+    /** VR 模式點一下螢幕 / 按遙控器確認鍵 */
+    private fun onSelect() {
+        when {
+            menuOpen -> if (menu.hover != VrMenu.NONE) activate(menu.hover)
+            !renderer.showCursor -> lastMoveAt = SystemClock.uptimeMillis()  // 游標隱藏時先叫出游標
+            else -> tapAtCursor(1)
+        }
     }
 
     private fun tapAtCursor(count: Int) {
@@ -276,17 +391,14 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (!vrMode) return super.onKeyDown(keyCode, event)
         when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND ->
-                presentation?.tap(SRC_W * 0.2f, SRC_H * 0.5f, 2)   // 左側雙擊 = 倒退
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ->
-                presentation?.tap(SRC_W * 0.8f, SRC_H * 0.5f, 2)   // 右側雙擊 = 快進
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> presentation?.seekBy(-10)
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> presentation?.seekBy(10)
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> presentation?.togglePlay()
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ->
-                tapAtCursor(1)
-            KeyEvent.KEYCODE_DPAD_UP ->
-                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-            KeyEvent.KEYCODE_DPAD_DOWN ->
-                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+            KeyEvent.KEYCODE_BUTTON_A -> onSelect()
+            KeyEvent.KEYCODE_DPAD_UP -> changeVolume(AudioManager.ADJUST_RAISE)
+            KeyEvent.KEYCODE_DPAD_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             else -> return super.onKeyDown(keyCode, event)
         }
         return true
@@ -311,18 +423,149 @@ class MainActivity : Activity(), SensorEventListener {
         val fx = -r[2]; val fy = -r[5]; val fz = -r[8]
         val yaw = atan2(fx, fy)
         val pitch = asin(fz.coerceIn(-1f, 1f))
-        if (baseYaw.isNaN()) { baseYaw = yaw; basePitch = pitch }
+        if (baseYaw.isNaN()) { baseYaw = yaw; anchorYaw = 0f }
+        if (basePitch.isNaN()) { basePitch = pitch; anchorPitch = 0f }
 
         var dYaw = yaw - baseYaw
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
         if (dYaw < -PI) dYaw += (2 * PI).toFloat()
         val dPitch = pitch - basePitch
+        val now = SystemClock.uptimeMillis()
 
-        val fovV = GAZE_FOV * SRC_H / SRC_W
+        // 低頭打開控制面板,抬頭關閉
+        if (!menuOpen && -dPitch > MENU_OPEN) setMenu(true)
+        else if (menuOpen && -dPitch < MENU_CLOSE) setMenu(false)
+
         val tx = (0.5f + dYaw / GAZE_FOV).coerceIn(0f, 1f)
-        val ty = (0.5f - dPitch / fovV).coerceIn(0f, 1f)
+        val ty = if (menuOpen) {
+            // 面板打開時,游標上下只在面板範圍內移動
+            (VrMenu.Y0 + (-dPitch - MENU_Y_START) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
+                .coerceIn(VrMenu.Y0, VrMenu.Y1)
+        } else {
+            val fovV = GAZE_FOV * SRC_H / SRC_W
+            (0.5f - dPitch / fovV).coerceIn(0f, 1f)
+        }
         renderer.cursorX += (tx - renderer.cursorX) * 0.5f   // 輕微平滑,減少抖動
         renderer.cursorY += (ty - renderer.cursorY) * 0.5f
+
+        if (menuOpen) {
+            renderer.showCursor = true
+            updateMenu(now)
+        } else {
+            // 頭轉動時才顯示游標,靜止一陣子就隱藏,不影響看影片
+            if (abs(dYaw - anchorYaw) + abs(dPitch - anchorPitch) > CURSOR_MOVE) {
+                anchorYaw = dYaw; anchorPitch = dPitch
+                lastMoveAt = now
+            }
+            renderer.showCursor = now - lastMoveAt < CURSOR_HIDE_MS
+        }
+    }
+
+    // ---------------- 低頭控制面板 ----------------
+
+    /** 下一筆感測器資料當作正前方 */
+    private fun recenter() {
+        baseYaw = Float.NaN
+        basePitch = Float.NaN
+    }
+
+    private fun setMenu(open: Boolean) {
+        if (menuOpen == open && renderer.showPanel == open) return
+        menuOpen = open
+        renderer.showPanel = open
+        menu.hover = VrMenu.NONE
+        menu.dwell = 0f
+        dwellDone = false
+        if (open) {
+            menu.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            menu.volumeMax = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            pollStatus()
+            redrawPanel(force = true)
+        } else {
+            lastMoveAt = 0L
+        }
+    }
+
+    private fun updateMenu(now: Long) {
+        val cx = renderer.cursorX
+        val t = menu.hitTest(cx, renderer.cursorY)
+        if (t != menu.hover) {
+            menu.hover = t
+            hoverStart = now
+            hoverAnchorX = cx
+            dwellDone = false
+        }
+        if (t == VrMenu.BAR) {
+            menu.hoverFrac = menu.barFraction(cx)
+            // 進度條要看著同一點不動才計時
+            if (abs(cx - hoverAnchorX) > 0.015f) {
+                hoverAnchorX = cx
+                hoverStart = now
+                dwellDone = false
+            }
+        }
+        val need = if (t == VrMenu.BAR) DWELL_BAR_MS else DWELL_MS
+        menu.dwell = if (t == VrMenu.NONE || dwellDone) 0f
+        else ((now - hoverStart).toFloat() / need).coerceIn(0f, 1f)
+
+        if (t != VrMenu.NONE && !dwellDone && menu.dwell >= 1f) {
+            activate(t)
+            if (t == VrMenu.BTN_VOL_DOWN || t == VrMenu.BTN_VOL_UP) {
+                hoverStart = now - need + REPEAT_MS   // 繼續看著 = 持續調整
+            } else {
+                dwellDone = true
+            }
+            menu.dwell = 0f
+        }
+
+        if (now - lastStatusPoll > 500) pollStatus()
+        redrawPanel()
+    }
+
+    private fun activate(target: Int) {
+        val p = presentation ?: return
+        when (target) {
+            VrMenu.BAR -> {
+                p.seekTo(menu.hoverFrac)
+                menu.current = menu.hoverFrac * menu.duration
+            }
+            VrMenu.BTN_BACK -> p.seekBy(-10)
+            VrMenu.BTN_PLAY -> p.togglePlay()
+            VrMenu.BTN_FWD -> p.seekBy(10)
+            VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
+            VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
+            VrMenu.BTN_RECENTER -> baseYaw = Float.NaN   // 只重設左右方向(低頭中不能重設上下)
+            VrMenu.BTN_EXIT -> { setVr(false); return }
+        }
+        handler.postDelayed({ pollStatus() }, 300)
+        redrawPanel(force = true)
+    }
+
+    private fun changeVolume(direction: Int) {
+        audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)  // VR 中不顯示系統音量條
+        menu.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+        redrawPanel(force = true)
+    }
+
+    private fun pollStatus() {
+        lastStatusPoll = SystemClock.uptimeMillis()
+        presentation?.videoStatus { st ->
+            menu.hasVideo = st != null
+            if (st != null) {
+                menu.current = st.current
+                menu.duration = st.duration
+                menu.paused = st.paused
+            }
+            redrawPanel(force = true)
+        }
+    }
+
+    private fun redrawPanel(force: Boolean = false) {
+        if (!menuOpen) return
+        val now = SystemClock.uptimeMillis()
+        if (!force && now - lastPanelDraw < 33) return   // 最多約每秒 30 次
+        lastPanelDraw = now
+        renderer.updatePanel { menu.draw(it) }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
