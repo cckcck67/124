@@ -29,6 +29,10 @@ class VrRenderer(
     @Volatile var ipd = 0f          // 左右間距偏移(佔單眼寬度比例,負 = 往中間靠)
     @Volatile var zoom = 1.4f       // VR 畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
     @Volatile var distortion = 0.15f // 桶形校正強度
+    @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
+    @Volatile var gap = 0f          // 兩眼畫面中間的黑色空隙(佔整個寬度比例),減少看到另一眼畫面的雙影
+    @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
+    @Volatile var stereo = 0        // 0 = 2D, 1 = 左右3D(左半給左眼), 2 = 上下3D(上半給左眼)
     @Volatile var showCursor = false
     @Volatile var showPanel = false
     @Volatile var cursorX = 0.5f    // 0~1,原始畫面座標
@@ -44,6 +48,7 @@ class VrRenderer(
     private var viewH = 1
     private var aPos = 0; private var aUv = 0
     private var uSt = 0; private var uTex = 0; private var uK = 0
+    private var uTilt = 0; private var uSrc = 0
 
     // 疊加層(游標 + 控制面板)
     private var overlay = 0
@@ -85,12 +90,14 @@ class VrRenderer(
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        program = buildProgram(VS, FS)
+        program = buildProgram(VIDEO_VS, FS)
         aPos = GLES20.glGetAttribLocation(program, "aPos")
         aUv = GLES20.glGetAttribLocation(program, "aUv")
         uSt = GLES20.glGetUniformLocation(program, "uSt")
         uTex = GLES20.glGetUniformLocation(program, "uTex")
         uK = GLES20.glGetUniformLocation(program, "uK")
+        uTilt = GLES20.glGetUniformLocation(program, "uTilt")
+        uSrc = GLES20.glGetUniformLocation(program, "uSrc")
 
         overlay = buildProgram(VS, OVERLAY_FS)
         oPos = GLES20.glGetAttribLocation(overlay, "aPos")
@@ -158,28 +165,38 @@ class VrRenderer(
                 }
             }
             val eyeW = viewW / 2
+            val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
+            val mode = stereo
             GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
             for (eye in 0..1) {
                 val r = fitRect(eyeW.toFloat(), viewH.toFloat())
+                val side = if (eye == 0) -1f else 1f
                 // ipd < 0:兩眼畫面往中間靠;ipd > 0:往外拉開
-                val shift = ipd * eyeW * (if (eye == 0) -1f else 1f)
-                val cx = eye * eyeW + eyeW / 2f + shift
+                val cx = eye * eyeW + eyeW / 2f + ipd * eyeW * side
                 val cy = viewH / 2f
-                GLES20.glScissor(eye * eyeW, 0, eyeW, viewH)
+                // 中間空隙:左眼裁掉右緣、右眼裁掉左緣
+                if (eye == 0) GLES20.glScissor(0, 0, eyeW - halfGap, viewH)
+                else GLES20.glScissor(eyeW + halfGap, 0, eyeW - halfGap, viewH)
                 val z = zoom
+                val vy = cy + lift * viewH
                 GLES20.glViewport(
-                    (cx - r[2] * z / 2f).toInt(), (cy - r[3] * z / 2f).toInt(),
+                    (cx - r[2] * z / 2f).toInt(), (vy - r[3] * z / 2f).toInt(),
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
-                drawVideo(distortion)
-                // 控制面板與游標不放大,確保完整看得到
+                // 3D 影片:每隻眼睛只取自己那一半
+                when (mode) {
+                    1 -> drawVideo(distortion, -side * tilt, 0.5f, 1f, if (eye == 0) 0f else 0.5f, 0f)
+                    2 -> drawVideo(distortion, -side * tilt, 1f, 0.5f, 0f, if (eye == 0) 0.5f else 0f)
+                    else -> drawVideo(distortion, -side * tilt)
+                }
+                // 控制面板與游標不放大、不移動,確保完整看得到
                 GLES20.glViewport((cx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
                 drawOverlay()
             }
         } else {
             val r = fitRect(viewW.toFloat(), viewH.toFloat())
             GLES20.glViewport(r[0].toInt(), r[1].toInt(), r[2].toInt(), r[3].toInt())
-            drawVideo(0f)
+            drawVideo(0f, 0f)
         }
     }
 
@@ -192,7 +209,10 @@ class VrRenderer(
         GLES20.glEnableVertexAttribArray(uv)
     }
 
-    private fun drawVideo(k: Float) {
+    private fun drawVideo(
+        k: Float, tiltRad: Float,
+        sx: Float = 1f, sy: Float = 1f, ox: Float = 0f, oy: Float = 0f
+    ) {
         GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -200,6 +220,8 @@ class VrRenderer(
         GLES20.glUniform1i(uTex, 0)
         GLES20.glUniformMatrix4fv(uSt, 1, false, stMatrix, 0)
         GLES20.glUniform1f(uK, k)
+        GLES20.glUniform1f(uTilt, tiltRad)
+        GLES20.glUniform4f(uSrc, sx, sy, ox, oy)
         bindQuad(aPos, aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
@@ -255,12 +277,25 @@ class VrRenderer(
             }
         """
 
+        // 影片用:可沿垂直軸翻轉(透視),uTilt > 0 時畫面右半往後倒
+        private const val VIDEO_VS = """
+            attribute vec2 aPos;
+            attribute vec2 aUv;
+            uniform float uTilt;
+            varying vec2 vUv;
+            void main() {
+                vUv = aUv;
+                gl_Position = vec4(aPos.x * cos(uTilt), aPos.y, 0.0, 1.0 + aPos.x * sin(uTilt) * 0.6);
+            }
+        """
+
         private const val FS = """
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
             uniform samplerExternalOES uTex;
             uniform mat4 uSt;
             uniform float uK;
+            uniform vec4 uSrc;
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv - 0.5;
@@ -270,6 +305,7 @@ class VrRenderer(
                     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
                 }
+                uv = uv * uSrc.xy + uSrc.zw;
                 gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
             }
         """

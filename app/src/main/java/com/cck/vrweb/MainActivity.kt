@@ -53,10 +53,12 @@ class MainActivity : Activity(), SensorEventListener {
         const val SRC_DPI = 240
 
         // 低頭控制面板(單位:弧度,以水平線為準)
-        const val MENU_OPEN = 0.35f      // 低頭約 20 度打開
-        const val MENU_CLOSE = 0.26f     // 抬頭回到約 15 度內關閉
-        const val MENU_Y_START = 0.30f   // 面板內游標上下對應的低頭角度範圍
-        const val MENU_Y_RANGE = 0.40f
+        const val MENU_OPEN = 0.52f      // 低頭約 30 度打開
+        const val MENU_CLOSE = 0.42f     // 抬頭回到約 24 度內關閉
+        const val MENU_Y_RANGE = 0.36f   // 面板最上緣到最下緣 = 低頭約 21 度
+        // 剛打開時(低頭 MENU_OPEN)游標正好在最上排空位的中間
+        val MENU_Y_START = MENU_OPEN - (VrMenu.START_Y - VrMenu.Y0) / (VrMenu.Y1 - VrMenu.Y0) * MENU_Y_RANGE
+        const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 0.75f // 面板左端到右端 = 轉頭約 43 度
         const val SMOOTH = 0.2f          // 游標平滑(越小越穩)
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
@@ -86,6 +88,7 @@ class MainActivity : Activity(), SensorEventListener {
     // 低頭控制面板
     private val menu = VrMenu()
     private var menuOpen = false
+    private var menuOpenedAt = 0L
     private var hoverStart = 0L
     private var hoverAnchorX = 0f
     private var dwellDone = false
@@ -108,6 +111,11 @@ class MainActivity : Activity(), SensorEventListener {
         renderer = VrRenderer(SRC_W, SRC_H) { st -> handler.post { attachSurface(st) } }
         renderer.ipd = prefs.getFloat("ipd2", defaultIpd())
         renderer.distortion = prefs.getFloat("k", 0.15f)
+        renderer.tilt = prefs.getFloat("tilt", 0f)
+        renderer.gap = prefs.getFloat("gap", 0f)
+        renderer.lift = prefs.getFloat("lift", 0.05f)
+        renderer.stereo = prefs.getInt("stereo", 0)
+        menu.stereo = renderer.stereo
         renderer.zoom = prefs.getFloat("zoom", 1.4f)
 
         glView = GLSurfaceView(this).apply {
@@ -150,18 +158,34 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("VR") { setVr(true) })
         }
 
-        bottomBar = LinearLayout(this).apply {
+        // 微調滑桿(兩排),數值會記住
+        val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            addView(slider("畫面大小", renderer.zoom, 1f, 2f, "%.2f倍") {
+                renderer.zoom = it; save("zoom", it)
+            }, weight())
+            addView(slider("畫面高低", renderer.lift, -0.2f, 0.2f, "%+.2f") {
+                renderer.lift = it; save("lift", it)
+            }, weight())
+        }
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(slider("左右間距", renderer.ipd, -0.3f, 0.1f, "%+.2f") {
+                renderer.ipd = it; save("ipd2", it)
+            }, weight())
+            addView(slider("中間空隙", renderer.gap, 0f, 0.15f, "%.2f") {
+                renderer.gap = it; save("gap", it)
+            }, weight())
+            // 以度數顯示,內部用弧度
+            addView(slider("翻轉角度", Math.toDegrees(renderer.tilt.toDouble()).toFloat(), -10f, 10f, "%+.1f度") {
+                renderer.tilt = Math.toRadians(it.toDouble()).toFloat(); save("tilt", renderer.tilt)
+            }, weight())
+        }
+        bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
-            addView(slider("畫面大小", renderer.zoom, 1f, 2f) {
-                renderer.zoom = it; prefs.edit().putFloat("zoom", it).apply()
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(slider("左右間距", renderer.ipd, -0.3f, 0.1f) {
-                renderer.ipd = it; prefs.edit().putFloat("ipd2", it).apply()
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(slider("鏡片校正", renderer.distortion, 0f, 0.5f) {
-                renderer.distortion = it; prefs.edit().putFloat("k", it).apply()
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(row1)
+            addView(row2)
         }
 
         val root = LinearLayout(this).apply {
@@ -179,18 +203,28 @@ class MainActivity : Activity(), SensorEventListener {
         setOnClickListener { onClick() }
     }
 
-    private fun slider(label: String, init: Float, lo: Float, hi: Float, onChange: (Float) -> Unit): View {
+    private fun weight() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+    private fun save(key: String, v: Float) = prefs.edit().putFloat(key, v).apply()
+
+    private fun slider(
+        label: String, init: Float, lo: Float, hi: Float, format: String,
+        onChange: (Float) -> Unit
+    ): View {
         val tv = TextView(this).apply {
-            text = label
+            text = "$label ${format.format(init)}"
             setTextColor(Color.WHITE)
             setPadding(24, 0, 12, 0)
         }
         val sb = SeekBar(this).apply {
-            max = 100
-            progress = ((init - lo) / (hi - lo) * 100).toInt()
+            max = 200
+            progress = ((init - lo) / (hi - lo) * 200).toInt().coerceIn(0, 200)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) onChange(lo + (hi - lo) * p / 100f)
+                    if (!fromUser) return
+                    val v = lo + (hi - lo) * p / 200f
+                    tv.text = "$label ${format.format(v)}"
+                    onChange(v)
                 }
                 override fun onStartTrackingTouch(s: SeekBar) {}
                 override fun onStopTrackingTouch(s: SeekBar) {}
@@ -449,7 +483,8 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showPanel = open
         renderer.showCursor = open   // 紅點只跟著面板出現
         renderer.cursorX = 0.5f
-        renderer.cursorY = VrMenu.Y0 + 0.1f * (VrMenu.Y1 - VrMenu.Y0)
+        renderer.cursorY = VrMenu.START_Y   // 從最上排空位開始,不會直接落在按鈕上
+        menuOpenedAt = SystemClock.uptimeMillis()
         menu.hover = VrMenu.NONE
         menu.dwell = 0f
         dwellDone = false
@@ -463,7 +498,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun updateMenu(now: Long) {
         val cx = renderer.cursorX
-        val t = menu.hitTest(cx, renderer.cursorY)
+        val t = if (now - menuOpenedAt < OPEN_GRACE_MS) VrMenu.NONE else menu.hitTest(cx, renderer.cursorY)
         if (t != menu.hover) {
             menu.hover = t
             hoverStart = now
@@ -509,6 +544,12 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
+            VrMenu.BTN_STEREO -> {
+                val m = (renderer.stereo + 1) % VrMenu.STEREO_NAMES.size
+                renderer.stereo = m
+                menu.stereo = m
+                prefs.edit().putInt("stereo", m).apply()
+            }
         }
         handler.postDelayed({ pollStatus() }, 300)
         redrawPanel(force = true)
