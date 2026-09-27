@@ -26,7 +26,8 @@ class VrRenderer(
 ) : GLSurfaceView.Renderer {
 
     @Volatile var vrMode = false
-    @Volatile var ipd = 0f          // 眼距偏移(佔單眼寬度比例)
+    @Volatile var ipd = 0f          // 左右間距偏移(佔單眼寬度比例,負 = 往中間靠)
+    @Volatile var zoom = 1.4f       // VR 畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
     @Volatile var distortion = 0.15f // 桶形校正強度
     @Volatile var showCursor = false
     @Volatile var showPanel = false
@@ -160,14 +161,19 @@ class VrRenderer(
             GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
             for (eye in 0..1) {
                 val r = fitRect(eyeW.toFloat(), viewH.toFloat())
-                // ipd > 0:左眼往左、右眼往右(兩眼畫面拉開)
+                // ipd < 0:兩眼畫面往中間靠;ipd > 0:往外拉開
                 val shift = ipd * eyeW * (if (eye == 0) -1f else 1f)
+                val cx = eye * eyeW + eyeW / 2f + shift
+                val cy = viewH / 2f
                 GLES20.glScissor(eye * eyeW, 0, eyeW, viewH)
+                val z = zoom
                 GLES20.glViewport(
-                    (eye * eyeW + r[0] + shift).toInt(), r[1].toInt(),
-                    r[2].toInt(), r[3].toInt()
+                    (cx - r[2] * z / 2f).toInt(), (cy - r[3] * z / 2f).toInt(),
+                    (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
                 drawVideo(distortion)
+                // 控制面板與游標不放大,確保完整看得到
+                GLES20.glViewport((cx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
                 drawOverlay()
             }
         } else {

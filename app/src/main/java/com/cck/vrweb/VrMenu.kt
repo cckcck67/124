@@ -14,19 +14,19 @@ class VrMenu {
 
     companion object {
         // 面板在畫面上的位置(比例,y 向下)
-        const val X0 = 0.08f
-        const val X1 = 0.92f
-        const val Y0 = 0.66f
-        const val Y1 = 0.96f
+        const val X0 = 0.2f
+        const val X1 = 0.8f
+        const val Y0 = 0.64f
+        const val Y1 = 0.94f
 
         // 面板點陣圖大小
         const val W = 1280
-        const val H = 256
+        const val H = 360
 
-        private const val ROW_SPLIT = 110f   // 上排(進度條)/下排(按鈕)分界
+        private const val ROW_SPLIT = 150f   // 上排(進度條)/下排(按鈕)分界
         private const val BAR_L = 170f
         private const val BAR_R = 990f
-        private const val BAR_Y = 60f
+        private const val BAR_Y = 75f
         private const val BTN_L = 20f
         private const val BTN_R = 1260f
 
@@ -37,9 +37,7 @@ class VrMenu {
         const val BTN_FWD = 2
         const val BTN_VOL_DOWN = 3
         const val BTN_VOL_UP = 4
-        const val BTN_RECENTER = 5
-        const val BTN_EXIT = 6
-        private val LABELS = arrayOf("倒退10秒", "播放/暫停", "快進10秒", "音量－", "音量＋", "游標置中", "離開VR")
+        private val LABELS = arrayOf("倒退10秒", "播放/暫停", "快進10秒", "音量－", "音量＋")
 
         fun fmt(sec: Double): String {
             val s = sec.toLong().coerceAtLeast(0)
@@ -63,7 +61,7 @@ class VrMenu {
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); textSize = 34f }
     private val centerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFFFFFFF.toInt(); textSize = 34f; textAlign = Paint.Align.CENTER
+        color = 0xFFFFFFFF.toInt(); textSize = 44f; textAlign = Paint.Align.CENTER
     }
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeWidth = 7f; color = 0xFFFFD040.toInt()
@@ -119,10 +117,10 @@ class VrMenu {
                 c.drawArc(rect, -90f, 360f * dwell, false, ringPaint)
                 centerText.textSize = 28f
                 c.drawText(fmt(hoverFrac * duration), x, BAR_Y + 52, centerText)
-                centerText.textSize = 34f
+                centerText.textSize = 44f
             }
         } else {
-            c.drawText("找不到可控制的影片(看著畫面點一下可叫出網頁播放器)", 30f, BAR_Y + 12, textPaint)
+            c.drawText("找不到可控制的影片", 30f, BAR_Y + 12, textPaint)
         }
         textPaint.textSize = 30f
         c.drawText("音量$volume", 1130f, BAR_Y + 12, textPaint)
@@ -133,16 +131,16 @@ class VrMenu {
         for (i in LABELS.indices) {
             val l = BTN_L + i * bw + 6
             val r = BTN_L + (i + 1) * bw - 6
-            rect.set(l, 122f, r, 242f)
+            rect.set(l, 170f, r, 340f)
             fillPaint.color = if (hover == i) 0xFF2F5A88.toInt() else 0xFF2A2A2A.toInt()
             c.drawRoundRect(rect, 18f, 18f, fillPaint)
             if (hover == i && dwell > 0f) {
                 fillPaint.color = 0xFF5B9BE0.toInt()
-                rect.set(l, 122f, l + (r - l) * dwell, 242f)
+                rect.set(l, 170f, l + (r - l) * dwell, 340f)
                 c.drawRoundRect(rect, 18f, 18f, fillPaint)
             }
             val label = if (i == BTN_PLAY && hasVideo) (if (paused) "播放" else "暫停") else LABELS[i]
-            c.drawText(label, (l + r) / 2, 194f, centerText)
+            c.drawText(label, (l + r) / 2, 270f, centerText)
         }
     }
 }

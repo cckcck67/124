@@ -51,20 +51,17 @@ class MainActivity : Activity(), SensorEventListener {
         const val SRC_W = 1280
         const val SRC_H = 720
         const val SRC_DPI = 240
-        const val GAZE_FOV = 1.0f   // 頭轉約 57 度 = 游標從畫面一端到另一端
 
-        // 低頭控制面板(單位:弧度,相對於「正前方」)
+        // 低頭控制面板(單位:弧度,以水平線為準)
         const val MENU_OPEN = 0.35f      // 低頭約 20 度打開
         const val MENU_CLOSE = 0.26f     // 抬頭回到約 15 度內關閉
         const val MENU_Y_START = 0.30f   // 面板內游標上下對應的低頭角度範圍
         const val MENU_Y_RANGE = 0.40f
+        const val MENU_YAW_RANGE = 0.75f // 面板左端到右端 = 轉頭約 43 度
+        const val SMOOTH = 0.2f          // 游標平滑(越小越穩)
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
         const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
-
-        // 游標自動隱藏
-        const val CURSOR_MOVE = 0.05f    // 頭轉超過約 3 度才顯示游標
-        const val CURSOR_HIDE_MS = 2500L // 頭不動多久後隱藏
     }
 
     private lateinit var prefs: SharedPreferences
@@ -82,8 +79,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: WebPresentation? = null
     private var vrMode = false
-    private var baseYaw = Float.NaN
-    private var basePitch = 0f
+    private var menuYaw = 0f       // 面板打開時的面向 = 面板正中間
+    private var basePitch = 0f     // 0 = 水平線;長按螢幕可改成目前角度(躺著看時)
+    private var recenterPitch = false
 
     // 低頭控制面板
     private val menu = VrMenu()
@@ -93,11 +91,6 @@ class MainActivity : Activity(), SensorEventListener {
     private var dwellDone = false
     private var lastPanelDraw = 0L
     private var lastStatusPoll = 0L
-
-    // 游標自動隱藏
-    private var lastMoveAt = 0L
-    private var anchorYaw = 0f
-    private var anchorPitch = 0f
 
     // 2D 模式點擊偵測(用來判斷是否點到網頁文字框)
     private var downX = 0f
@@ -113,8 +106,9 @@ class MainActivity : Activity(), SensorEventListener {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
 
         renderer = VrRenderer(SRC_W, SRC_H) { st -> handler.post { attachSurface(st) } }
-        renderer.ipd = prefs.getFloat("ipd", 0f)
+        renderer.ipd = prefs.getFloat("ipd2", defaultIpd())
         renderer.distortion = prefs.getFloat("k", 0.15f)
+        renderer.zoom = prefs.getFloat("zoom", 1.4f)
 
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
@@ -153,15 +147,17 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("←") { presentation?.handleBack() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("前往") { go() })
-            addView(button("YouTube") { openUrl("https://m.youtube.com") })
             addView(button("VR") { setVr(true) })
         }
 
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(bg)
-            addView(slider("眼距", renderer.ipd, -0.15f, 0.15f) {
-                renderer.ipd = it; prefs.edit().putFloat("ipd", it).apply()
+            addView(slider("畫面大小", renderer.zoom, 1f, 2f) {
+                renderer.zoom = it; prefs.edit().putFloat("zoom", it).apply()
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(slider("左右間距", renderer.ipd, -0.3f, 0.1f) {
+                renderer.ipd = it; prefs.edit().putFloat("ipd2", it).apply()
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(slider("鏡片校正", renderer.distortion, 0f, 0.5f) {
                 renderer.distortion = it; prefs.edit().putFloat("k", it).apply()
@@ -205,6 +201,20 @@ class MainActivity : Activity(), SensorEventListener {
             addView(tv)
             addView(sb, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
+    }
+
+    /**
+     * 依螢幕實際寬度算出兩眼畫面要往中間靠多少,
+     * 讓兩個畫面中心距離接近一般 VR 盒子的鏡片距離(約 63mm)。
+     */
+    private fun defaultIpd(): Float {
+        val m = resources.displayMetrics
+        val w = maxOf(m.widthPixels, m.heightPixels).toFloat()
+        val dpi = (m.xdpi + m.ydpi) / 2f
+        if (dpi <= 0f) return -0.05f
+        val eyeW = w / 2f
+        val lensPx = 63f / 25.4f * dpi
+        return (-(eyeW - lensPx) / 2f / eyeW).coerceIn(-0.25f, 0f)
     }
 
     private fun go() {
@@ -282,11 +292,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun setVr(on: Boolean) {
         vrMode = on
         renderer.vrMode = on
-        renderer.showCursor = on
-        renderer.cursorX = 0.5f
-        renderer.cursorY = 0.5f
-        recenter()
-        lastMoveAt = SystemClock.uptimeMillis()
+        renderer.showCursor = false
         setMenu(false)
         topBar.visibility = if (on) View.GONE else View.VISIBLE
         bottomBar.visibility = if (on) View.GONE else View.VISIBLE
@@ -301,11 +307,8 @@ class MainActivity : Activity(), SensorEventListener {
         gesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean { onSelect(); return true }
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (!menuOpen) tapAtCursor(2)
-                return true
-            }
-            override fun onLongPress(e: MotionEvent) { recenter() }
+            override fun onDoubleTap(e: MotionEvent) = true
+            override fun onLongPress(e: MotionEvent) { recenterPitch = true }
         })
 
         glView.setOnTouchListener { _, ev ->
@@ -377,14 +380,10 @@ class MainActivity : Activity(), SensorEventListener {
     private fun onSelect() {
         when {
             menuOpen -> if (menu.hover != VrMenu.NONE) activate(menu.hover)
-            !renderer.showCursor -> lastMoveAt = SystemClock.uptimeMillis()  // 游標隱藏時先叫出游標
-            else -> tapAtCursor(1)
+            else -> presentation?.togglePlay()   // 沒開面板時點一下 = 播放/暫停
         }
     }
 
-    private fun tapAtCursor(count: Int) {
-        presentation?.tap(renderer.cursorX * SRC_W, renderer.cursorY * SRC_H, count)
-    }
 
     // ---------------- 藍牙搖桿 / 遙控器 ----------------
 
@@ -423,56 +422,34 @@ class MainActivity : Activity(), SensorEventListener {
         val fx = -r[2]; val fy = -r[5]; val fz = -r[8]
         val yaw = atan2(fx, fy)
         val pitch = asin(fz.coerceIn(-1f, 1f))
-        if (baseYaw.isNaN()) { baseYaw = yaw; anchorYaw = 0f }
-        if (basePitch.isNaN()) { basePitch = pitch; anchorPitch = 0f }
-
-        var dYaw = yaw - baseYaw
-        if (dYaw > PI) dYaw -= (2 * PI).toFloat()
-        if (dYaw < -PI) dYaw += (2 * PI).toFloat()
-        val dPitch = pitch - basePitch
-        val now = SystemClock.uptimeMillis()
+        if (recenterPitch) { basePitch = pitch; recenterPitch = false }
+        val down = basePitch - pitch   // 低頭角度
 
         // 低頭打開控制面板,抬頭關閉
-        if (!menuOpen && -dPitch > MENU_OPEN) setMenu(true)
-        else if (menuOpen && -dPitch < MENU_CLOSE) setMenu(false)
+        if (!menuOpen && down > MENU_OPEN) { menuYaw = yaw; setMenu(true) }
+        else if (menuOpen && down < MENU_CLOSE) setMenu(false)
+        if (!menuOpen) return
 
-        val tx = (0.5f + dYaw / GAZE_FOV).coerceIn(0f, 1f)
-        val ty = if (menuOpen) {
-            // 面板打開時,游標上下只在面板範圍內移動
-            (VrMenu.Y0 + (-dPitch - MENU_Y_START) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
-                .coerceIn(VrMenu.Y0, VrMenu.Y1)
-        } else {
-            val fovV = GAZE_FOV * SRC_H / SRC_W
-            (0.5f - dPitch / fovV).coerceIn(0f, 1f)
-        }
-        renderer.cursorX += (tx - renderer.cursorX) * 0.5f   // 輕微平滑,減少抖動
-        renderer.cursorY += (ty - renderer.cursorY) * 0.5f
-
-        if (menuOpen) {
-            renderer.showCursor = true
-            updateMenu(now)
-        } else {
-            // 頭轉動時才顯示游標,靜止一陣子就隱藏,不影響看影片
-            if (abs(dYaw - anchorYaw) + abs(dPitch - anchorPitch) > CURSOR_MOVE) {
-                anchorYaw = dYaw; anchorPitch = dPitch
-                lastMoveAt = now
-            }
-            renderer.showCursor = now - lastMoveAt < CURSOR_HIDE_MS
-        }
+        var dYaw = yaw - menuYaw
+        if (dYaw > PI) dYaw -= (2 * PI).toFloat()
+        if (dYaw < -PI) dYaw += (2 * PI).toFloat()
+        val tx = (0.5f + dYaw / MENU_YAW_RANGE * (VrMenu.X1 - VrMenu.X0)).coerceIn(VrMenu.X0, VrMenu.X1)
+        val ty = (VrMenu.Y0 + (down - MENU_Y_START) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
+            .coerceIn(VrMenu.Y0, VrMenu.Y1)
+        renderer.cursorX += (tx - renderer.cursorX) * SMOOTH
+        renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
+        updateMenu(SystemClock.uptimeMillis())
     }
 
     // ---------------- 低頭控制面板 ----------------
-
-    /** 下一筆感測器資料當作正前方 */
-    private fun recenter() {
-        baseYaw = Float.NaN
-        basePitch = Float.NaN
-    }
 
     private fun setMenu(open: Boolean) {
         if (menuOpen == open && renderer.showPanel == open) return
         menuOpen = open
         renderer.showPanel = open
+        renderer.showCursor = open   // 紅點只跟著面板出現
+        renderer.cursorX = 0.5f
+        renderer.cursorY = VrMenu.Y0 + 0.1f * (VrMenu.Y1 - VrMenu.Y0)
         menu.hover = VrMenu.NONE
         menu.dwell = 0f
         dwellDone = false
@@ -481,8 +458,6 @@ class MainActivity : Activity(), SensorEventListener {
             menu.volumeMax = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             pollStatus()
             redrawPanel(force = true)
-        } else {
-            lastMoveAt = 0L
         }
     }
 
@@ -534,8 +509,6 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
-            VrMenu.BTN_RECENTER -> baseYaw = Float.NaN   // 只重設左右方向(低頭中不能重設上下)
-            VrMenu.BTN_EXIT -> { setVr(false); return }
         }
         handler.postDelayed({ pollStatus() }, 300)
         redrawPanel(force = true)
