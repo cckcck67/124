@@ -57,12 +57,13 @@ class MainActivity : Activity(), SensorEventListener {
         // 低頭控制面板(單位:弧度,以水平線為準)
         const val MENU_OPEN = 0.785f     // 低頭約 45 度打開
         const val MENU_CLOSE = 0.65f     // 抬頭回到約 37 度內關閉
-        const val MENU_Y_RANGE = 0.30f   // 面板最上緣到最下緣 = 低頭約 17 度
+        const val MENU_Y_RANGE = 0.40f   // 面板最上緣到最下緣 = 低頭約 23 度
         // 剛打開時(低頭 MENU_OPEN)游標正好在最上排空位的中間
         val MENU_Y_START = MENU_OPEN - (VrMenu.START_Y - VrMenu.Y0) / (VrMenu.Y1 - VrMenu.Y0) * MENU_Y_RANGE
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
-        const val MENU_YAW_RANGE = 0.75f // 面板左端到右端 = 轉頭約 43 度
-        const val SMOOTH = 0.2f          // 游標平滑(越小越穩)
+        const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
+        const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
+        const val RECENTER_DELAY_MS = 2000L  // 按「置中」後,給時間抬頭看正前方
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
         const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
@@ -94,16 +95,21 @@ class MainActivity : Activity(), SensorEventListener {
     // 頭部方向
     private val rot = FloatArray(9)
     private var reverseLandscape = false
-    private var lastYaw = 0f
-    private var frontYaw = Float.NaN  // VR180 / 360 的「正前方」
-    private var basePitch = 0f        // 0 = 水平線;長按螢幕可改成目前角度(躺著看時)
+    // 參考方向(右、上、前):VR180 的影片方向,以及判斷「低頭」的基準。
+    // 進入 VR 時 = 水平面、目前面向;置中後 = 當時頭的完整方向(可躺著看)
+    private val refR = FloatArray(3)
+    private val refU = FloatArray(3)
+    private val refF = FloatArray(3)
+    private var needLevelRef = true
     private var recenter = false
+    private var recenterAt = 0L
+    private var lastAz = 0f
 
     // 控制面板
     private val menu = VrMenu()
     private var menuOpen = false
     private var menuOpenedAt = 0L
-    private var menuYaw = 0f          // 面板打開時的面向 = 面板正中間
+    private var menuAz = 0f           // 面板打開時的面向 = 面板正中間
     private var hoverStart = 0L
     private var hoverAnchorX = 0f
     private var dwellDone = false
@@ -399,7 +405,8 @@ class MainActivity : Activity(), SensorEventListener {
         setMenu(false)
         topBar.visibility = if (on) View.GONE else View.VISIBLE
         reverseLandscape = displayRotation() == Surface.ROTATION_270
-        frontYaw = Float.NaN
+        needLevelRef = true
+        recenterAt = 0L
         hideKeyboard()
         hideSystemBars()
     }
@@ -545,35 +552,46 @@ class MainActivity : Activity(), SensorEventListener {
         val r0 = s * yw0; val r1 = s * yw1; val r2 = s * yw2
         val u0 = -s * xw0; val u1 = -s * xw1; val u2 = -s * xw2
 
-        val yaw = atan2(f0, f1)
-        val pitch = asin(f2.coerceIn(-1f, 1f))
-        lastYaw = yaw
-        if (frontYaw.isNaN()) frontYaw = yaw
-        if (recenter) {
-            frontYaw = yaw
-            basePitch = pitch
+        val now = SystemClock.uptimeMillis()
+
+        if (needLevelRef) {
+            // 水平面上、目前面向的方向當正前方
+            val yaw = atan2(f0, f1)
+            val sy = sin(yaw); val cy = cos(yaw)
+            refR[0] = cy; refR[1] = -sy; refR[2] = 0f
+            refU[0] = 0f; refU[1] = 0f; refU[2] = 1f
+            refF[0] = sy; refF[1] = cy; refF[2] = 0f
+            needLevelRef = false
+        }
+        if (recenter || (recenterAt > 0 && now >= recenterAt)) {
+            // 目前頭的完整方向當正前方(躺著看天花板也可以)
+            refR[0] = r0; refR[1] = r1; refR[2] = r2
+            refU[0] = u0; refU[1] = u1; refU[2] = u2
+            refF[0] = f0; refF[1] = f1; refF[2] = f2
             recenter = false
+            recenterAt = 0L
         }
 
-        // 影片座標:正前方(水平)、右方、正上方
-        val sy = sin(frontYaw); val cy = cos(frontYaw)
-        val mode = renderer.mode
-        if (VrRenderer.isSphere(mode)) {
-            // 相機座標(右、上、前) → 影片座標(右、上、前),直行優先
+        if (VrRenderer.isSphere(renderer.mode)) {
+            // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先
             renderer.head = floatArrayOf(
-                r0 * cy - r1 * sy, r2, r0 * sy + r1 * cy,
-                u0 * cy - u1 * sy, u2, u0 * sy + u1 * cy,
-                f0 * cy - f1 * sy, f2, f0 * sy + f1 * cy
+                dot(refR, r0, r1, r2), dot(refU, r0, r1, r2), dot(refF, r0, r1, r2),
+                dot(refR, u0, u1, u2), dot(refU, u0, u1, u2), dot(refF, u0, u1, u2),
+                dot(refR, f0, f1, f2), dot(refU, f0, f1, f2), dot(refF, f0, f1, f2)
             )
         }
 
+        // 視線在參考座標中的左右角度與低頭角度
+        val az = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
+        val down = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        lastAz = az
+
         // ---- 控制面板:低頭打開,抬頭關閉 ----
-        val down = basePitch - pitch   // 低頭角度
         if (!menuOpen && down > MENU_OPEN) setMenu(true)
         else if (menuOpen && down < MENU_CLOSE) setMenu(false)
         if (!menuOpen) return
 
-        var dYaw = yaw - menuYaw
+        var dYaw = az - menuAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
         if (dYaw < -PI) dYaw += (2 * PI).toFloat()
         val tx = (0.5f + dYaw / MENU_YAW_RANGE * (VrMenu.X1 - VrMenu.X0)).coerceIn(VrMenu.X0, VrMenu.X1)
@@ -583,6 +601,8 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
         updateMenu(SystemClock.uptimeMillis())
     }
+
+    private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
 
     // ---------------- 控制面板 ----------------
 
@@ -594,7 +614,7 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorX = 0.5f
         renderer.cursorY = VrMenu.START_Y   // 從最上排空位開始,不會直接落在按鈕上
         menuOpenedAt = SystemClock.uptimeMillis()
-        menuYaw = lastYaw
+        menuAz = lastAz
         menu.hover = VrMenu.NONE
         menu.popup = VrMenu.NONE
         menu.dwell = 0f
@@ -615,8 +635,6 @@ class MainActivity : Activity(), SensorEventListener {
             hoverStart = now
             hoverAnchorX = cx
             dwellDone = false
-            // 看到別的按鈕 → 收起拉出的選項
-            if (t in 0 until VrMenu.OPTION && t != VrMenu.BAR && t != menu.popup) menu.popup = VrMenu.NONE
         }
         if (t == VrMenu.BAR) {
             menu.hoverFrac = menu.barFraction(cx)
@@ -656,6 +674,8 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
+            // 置中:給兩秒抬頭看想要的正前方,再以當時的方向為準
+            VrMenu.BTN_RECENTER -> recenterAt = SystemClock.uptimeMillis() + RECENTER_DELAY_MS
             // 速度 / 模式:在上方拉出選項(再看一次收起)
             VrMenu.BTN_SPEED, VrMenu.BTN_MODE ->
                 menu.popup = if (menu.popup == target) VrMenu.NONE else target
@@ -668,7 +688,6 @@ class MainActivity : Activity(), SensorEventListener {
                     renderer.mode = i
                     menu.mode = i
                     prefs.edit().putInt("mode", i).apply()
-                    frontYaw = lastYaw   // 切到 VR180 / 360 時,目前面向 = 影片正前方
                 }
                 menu.popup = VrMenu.NONE
             }

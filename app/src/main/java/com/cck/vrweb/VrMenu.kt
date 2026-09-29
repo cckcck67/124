@@ -8,7 +8,7 @@ import android.graphics.RectF
 /**
  * 低頭才出現的控制面板(由上到下):
  * 空白列(游標從這裡開始,不會誤觸)→ 進度條 → 按鈕 → 資訊列。
- * 「速度」「模式」按鈕會在上方拉出選項列,看著選項就能選。
+ * 「速度」「模式」按鈕會在上方拉出選項列,看著選項就能選;選項拉出時其他按鈕暫停作用。
  * 用「注視停留」選取(看著不動一下子就觸發),不用打開 VR 盒子點螢幕。
  * 座標:cx, cy 為畫面比例(0~1,y 向下)。
  */
@@ -43,10 +43,11 @@ class VrMenu {
         const val BTN_VOL_UP = 3
         const val BTN_SPEED = 4
         const val BTN_MODE = 5
-        private val LABELS = arrayOf("播放/暫停", "快進10秒", "音量－", "音量＋", "速度", "模式")
+        const val BTN_RECENTER = 6
+        private val LABELS = arrayOf("播放/暫停", "快進10秒", "音量－", "音量＋", "速度", "模式", "置中")
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "360", "360上下3D")
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180")
         val SPEEDS = floatArrayOf(0.5f, 1f, 1.5f)
         private val SPEED_NAMES = arrayOf("0.5x", "1x", "1.5x")
 
@@ -107,7 +108,9 @@ class VrMenu {
             return if (canSeek() && px >= BAR_L - 20 && px <= BAR_R + 20) BAR else NONE
         }
         val i = ((px - ROW_L) / ((ROW_R - ROW_L) / LABELS.size)).toInt()
-        return if (i in LABELS.indices) i else NONE
+        if (i !in LABELS.indices) return NONE
+        // 選項拉出時,只有原本那顆按鈕(再看一次 = 收起)有作用,避免移動時誤觸
+        return if (popup != NONE && i != popup) NONE else i
     }
 
     fun barFraction(cx: Float): Float {
@@ -173,7 +176,7 @@ class VrMenu {
         }
 
         // ---- 按鈕 ----
-        centerText.textSize = 38f
+        centerText.textSize = 34f
         val bw = (ROW_R - ROW_L) / LABELS.size
         for (i in LABELS.indices) {
             val label = when (i) {
@@ -182,9 +185,11 @@ class VrMenu {
                 BTN_MODE -> MODE_NAMES[mode]
                 else -> LABELS[i]
             }
+            centerText.color = if (popup != NONE && popup != i) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
             drawButton(c, ROW_L + i * bw + 6, BAR_END + 6, ROW_L + (i + 1) * bw - 6, BTN_END - 6,
                 hover == i || popup == i, if (hover == i) dwell else 0f, label)
         }
+        centerText.color = 0xFFFFFFFF.toInt()
 
         // ---- 資訊列(不能點) ----
         centerText.textSize = 34f

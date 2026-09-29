@@ -19,7 +19,7 @@ import kotlin.math.tan
  * 把虛擬螢幕(網頁)的畫面當成 OES 材質畫出來。
  * - 非 VR:整頁畫一份
  * - VR 平面模式(2D / 左右3D):左右眼各畫一份平面畫面
- * - VR180 / 360 模式:把攤平的球面影片還原成球面,依頭部方向顯示(真正的虛擬實境)
+ * - VR180 模式:把左右兩個攤平的半球影片還原成球面,依頭部方向顯示(真正的虛擬實境)
  * VR 模式另外疊一層:游標 + 控制面板。
  */
 class VrRenderer(
@@ -32,13 +32,14 @@ class VrRenderer(
         const val MODE_2D = 0
         const val MODE_SBS = 1       // 左右3D(平面)
         const val MODE_VR180 = 2     // 左右3D 半球影片(左半給左眼)
-        const val MODE_360 = 3       // 360 全景影片(兩眼同畫面)
-        const val MODE_360TB = 4     // 360 上下3D(上半給左眼)
 
         /** 需要依頭部方向顯示的球面模式 */
-        fun isSphere(m: Int) = m == MODE_VR180 || m == MODE_360 || m == MODE_360TB
+        fun isSphere(m: Int) = m == MODE_VR180
 
-        const val GAP = 0.1f         // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影
+        // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影。
+        // VR180 畫面填滿整個眼睛,空隙太大會變成中間一大條黑,所以用小一點
+        const val GAP = 0.1f
+        const val GAP_SPHERE = 0.03f
 
         // 影片用:可沿垂直軸翻轉(透視),uTilt > 0 時畫面右半往後倒
         private const val VIDEO_VS = """
@@ -83,8 +84,7 @@ class VrRenderer(
             }
         """
 
-        // VR180 / 360:每個像素算出視線方向 → 經緯度 → 影片上的位置
-        // uLon = 經度換算比例(180 度影片 = 1/π,360 度影片 = 1/2π)
+        // VR180:每個像素算出視線方向 → 經緯度 → 半球影片上的位置
         private const val FS_180 = """
             #extension GL_OES_EGL_image_external : require
             #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -98,7 +98,6 @@ class VrRenderer(
             uniform vec2 uTan;
             uniform float uK;
             uniform vec4 uSrc;
-            uniform float uLon;
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv * 2.0 - 1.0;
@@ -106,7 +105,7 @@ class VrRenderer(
                 vec3 d = uHead * vec3(c.x * uTan.x, c.y * uTan.y, 1.0);
                 float lon = atan(d.x, d.z);
                 float lat = atan(d.y, length(d.xz));
-                vec2 uv = vec2(lon * uLon + 0.5, lat / 3.14159265 + 0.5);
+                vec2 uv = vec2(lon / 3.14159265 + 0.5, lat / 3.14159265 + 0.5);
                 if (uv.x < 0.0 || uv.x > 1.0) {
                     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
@@ -153,7 +152,7 @@ class VrRenderer(
     @Volatile var distortion = 0.15f // 桶形校正強度
     @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
-    @Volatile var fovDeg = 90f      // VR180 / 360 單眼水平視野(配合 VR 盒子鏡片)
+    @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
     @Volatile var showCursor = false
     @Volatile var showPanel = false
     @Volatile var cursorX = 0.5f    // 0~1,原始畫面座標
@@ -183,7 +182,7 @@ class VrRenderer(
     private var program180 = 0
     private var bPos = 0; private var bUv = 0
     private var bSt = 0; private var bTex = 0; private var bK = 0
-    private var bHead = 0; private var bTan = 0; private var bSrc = 0; private var bLon = 0
+    private var bHead = 0; private var bTan = 0; private var bSrc = 0
 
     // 疊加層(游標 + 控制面板)
     private var overlay = 0
@@ -243,7 +242,6 @@ class VrRenderer(
         bHead = GLES20.glGetUniformLocation(program180, "uHead")
         bTan = GLES20.glGetUniformLocation(program180, "uTan")
         bSrc = GLES20.glGetUniformLocation(program180, "uSrc")
-        bLon = GLES20.glGetUniformLocation(program180, "uLon")
 
         overlay = buildProgram(VS, OVERLAY_FS)
         oPos = GLES20.glGetAttribLocation(overlay, "aPos")
@@ -318,8 +316,9 @@ class VrRenderer(
         }
 
         val eyeW = viewW / 2
-        val halfGap = (GAP * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
         val m = mode
+        val gap = if (isSphere(m)) GAP_SPHERE else GAP
+        val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
         // 平面 2D 模式看整頁;其他模式只取網頁中的影片區域
         val c = if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop
         GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
@@ -334,20 +333,16 @@ class VrRenderer(
             if (eye == 0) GLES20.glScissor(0, 0, eyeW - halfGap, viewH)
             else GLES20.glScissor(eyeW + halfGap, 0, eyeW - halfGap, viewH)
 
-            // 這隻眼睛取來源的哪一塊(左右3D 取左 / 右半,上下3D 取上 / 下半)
-            var sx = c[2]; var sy = c[3]; var ox = c[0]; var oy = c[1]
+            // 這隻眼睛取來源的哪一塊(左右3D 只取自己那一半)
+            var sx = c[2]; val sy = c[3]; var ox = c[0]; val oy = c[1]
             if (m == MODE_SBS || m == MODE_VR180) {
                 sx *= 0.5f
                 if (eye == 1) ox += sx
-            } else if (m == MODE_360TB) {
-                sy *= 0.5f
-                if (eye == 0) oy += sy   // y 向上:上半在 oy + 一半
             }
 
             if (isSphere(m)) {
                 GLES20.glViewport((cx - eyeW / 2f).toInt(), 0, eyeW, viewH)
-                val lon = if (m == MODE_VR180) (1.0 / Math.PI) else (0.5 / Math.PI)
-                drawSphere(sx, sy, ox, oy, eyeW.toFloat() / viewH, lon.toFloat())
+                drawSphere(sx, sy, ox, oy, eyeW.toFloat() / viewH)
             } else {
                 val z = zoom
                 val vy = cy + lift * viewH
@@ -386,7 +381,7 @@ class VrRenderer(
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
-    private fun drawSphere(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float, lonScale: Float) {
+    private fun drawSphere(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float) {
         GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glUseProgram(program180)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -398,7 +393,6 @@ class VrRenderer(
         val tx = tan(Math.toRadians(fovDeg / 2.0)).toFloat()
         GLES20.glUniform2f(bTan, tx, tx / aspect)
         GLES20.glUniform4f(bSrc, sx, sy, ox, oy)
-        GLES20.glUniform1f(bLon, lonScale)
         bindQuad(bPos, bUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
