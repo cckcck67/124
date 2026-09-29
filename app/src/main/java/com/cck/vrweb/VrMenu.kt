@@ -41,9 +41,10 @@ class VrMenu {
         const val BTN_FWD = 2
         const val BTN_VOL_DOWN = 3
         const val BTN_VOL_UP = 4
-        const val BTN_STEREO = 5
-        private val LABELS = arrayOf("倒退10秒", "播放/暫停", "快進10秒", "音量－", "音量＋", "3D模式")
-        val STEREO_NAMES = arrayOf("2D", "左右3D", "上下3D")
+        const val BTN_MODE = 5
+        private val LABELS = arrayOf("倒退10秒", "播放/暫停", "快進10秒", "音量－", "音量＋", "模式")
+        // 順序對應 VrRenderer.MODE_*
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "YT 360")
 
         /** 資訊列正中間(游標起始位置)的畫面比例 y */
         val START_Y get() = Y0 + (INFO_END / 2f) / H * (Y1 - Y0)
@@ -65,7 +66,8 @@ class VrMenu {
     var paused = false
     var volume = 0
     var volumeMax = 15
-    var stereo = 0          // 0 = 2D, 1 = 左右3D, 2 = 上下3D
+    var mode = 0            // VrRenderer.MODE_*
+    var note = ""           // 額外狀態訊息(例如 YouTube 360 是否連上)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -108,7 +110,8 @@ class VrMenu {
         centerText.textSize = 36f
         centerText.color = 0xFFBBBBBB.toInt()
         val time = if (canSeek()) "${fmt(current)} / ${fmt(duration)}" else "找不到可控制的影片"
-        c.drawText("$time    音量 $volume    ${STEREO_NAMES[stereo]}", W / 2f, 64f, centerText)
+        val extra = if (note.isNotEmpty()) "    $note" else ""
+        c.drawText("$time    音量 $volume    ${MODE_NAMES[mode]}$extra", W / 2f, 64f, centerText)
         centerText.color = 0xFFFFFFFF.toInt()
 
         // ---- 進度條 ----
@@ -150,7 +153,7 @@ class VrMenu {
             }
             val label = when {
                 i == BTN_PLAY && hasVideo -> if (paused) "播放" else "暫停"
-                i == BTN_STEREO -> STEREO_NAMES[stereo]
+                i == BTN_MODE -> MODE_NAMES[mode]
                 else -> LABELS[i]
             }
             c.drawText(label, (l + r) / 2, (BTN_TOP + BTN_BOTTOM) / 2 + 14, centerText)

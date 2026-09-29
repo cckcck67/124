@@ -13,11 +13,14 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.tan
 
 /**
- * 把虛擬螢幕(網頁)的畫面當成 OES 材質,
- * 2D 模式畫一份;VR 模式左右各畫一份,可調眼距與鏡片變形校正。
- * VR 模式另外疊一層:游標 + 低頭控制面板。
+ * 把虛擬螢幕(網頁)的畫面當成 OES 材質畫出來。
+ * - 非 VR:整頁畫一份
+ * - VR 平面模式(2D / 左右3D / YouTube 360):左右眼各畫一份平面畫面
+ * - VR180 模式:把左右兩半的半球影片還原成球面,依頭部方向顯示(真正的虛擬實境)
+ * VR 模式另外疊一層:游標 + 控制面板。
  */
 class VrRenderer(
     private val srcW: Int,
@@ -25,30 +28,156 @@ class VrRenderer(
     private val onSurfaceReady: (SurfaceTexture) -> Unit
 ) : GLSurfaceView.Renderer {
 
+    companion object {
+        const val MODE_2D = 0
+        const val MODE_SBS = 1       // 左右3D(平面)
+        const val MODE_VR180 = 2     // 左右3D 半球影片
+        const val MODE_YT360 = 3     // YouTube 360(視角交給 YouTube 播放器)
+
+        const val GAP = 0.1f         // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影
+
+        // 影片用:可沿垂直軸翻轉(透視),uTilt > 0 時畫面右半往後倒
+        private const val VIDEO_VS = """
+            attribute vec2 aPos;
+            attribute vec2 aUv;
+            uniform float uTilt;
+            varying vec2 vUv;
+            void main() {
+                vUv = aUv;
+                gl_Position = vec4(aPos.x * cos(uTilt), aPos.y, 0.0, 1.0 + aPos.x * sin(uTilt) * 0.6);
+            }
+        """
+
+        private const val VS = """
+            attribute vec2 aPos;
+            attribute vec2 aUv;
+            varying vec2 vUv;
+            void main() {
+                vUv = aUv;
+                gl_Position = vec4(aPos, 0.0, 1.0);
+            }
+        """
+
+        // 平面影片:鏡片校正 + 取來源的某一塊(uSrc = 縮放 xy、位移 zw)
+        private const val FS = """
+            #extension GL_OES_EGL_image_external : require
+            precision mediump float;
+            uniform samplerExternalOES uTex;
+            uniform mat4 uSt;
+            uniform float uK;
+            uniform vec4 uSrc;
+            varying vec2 vUv;
+            void main() {
+                vec2 c = vUv - 0.5;
+                vec2 uv = 0.5 + c * (1.0 + uK * dot(c, c));
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
+                uv = uv * uSrc.xy + uSrc.zw;
+                gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
+            }
+        """
+
+        // VR180:每個像素算出視線方向 → 經緯度 → 半球影片上的位置
+        private const val FS_180 = """
+            #extension GL_OES_EGL_image_external : require
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
+            precision mediump float;
+            #endif
+            uniform samplerExternalOES uTex;
+            uniform mat4 uSt;
+            uniform mat3 uHead;
+            uniform vec2 uTan;
+            uniform float uK;
+            uniform vec4 uSrc;
+            varying vec2 vUv;
+            void main() {
+                vec2 c = vUv * 2.0 - 1.0;
+                c *= 1.0 + uK * dot(c, c) * 0.25;
+                vec3 d = uHead * vec3(c.x * uTan.x, c.y * uTan.y, 1.0);
+                float lon = atan(d.x, d.z);
+                float lat = atan(d.y, length(d.xz));
+                vec2 uv = vec2(lon / 3.14159265 + 0.5, lat / 3.14159265 + 0.5);
+                if (uv.x < 0.0 || uv.x > 1.0) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
+                uv = uv * uSrc.xy + uSrc.zw;
+                gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
+            }
+        """
+
+        // 游標 + 面板,套用相同的鏡片校正,輸出預乘 alpha
+        private const val OVERLAY_FS = """
+            precision mediump float;
+            uniform sampler2D uPanel;
+            uniform float uK;
+            uniform vec4 uRect;
+            uniform float uShowPanel;
+            uniform vec2 uCursor;
+            uniform float uShowCursor;
+            uniform float uAspect;
+            varying vec2 vUv;
+            void main() {
+                vec2 c = vUv - 0.5;
+                vec2 uv = 0.5 + c * (1.0 + uK * dot(c, c));
+                vec4 col = vec4(0.0);
+                if (uShowPanel > 0.5 && uv.x >= uRect.x && uv.x <= uRect.z && uv.y >= uRect.y && uv.y <= uRect.w) {
+                    vec2 p = (uv - uRect.xy) / (uRect.zw - uRect.xy);
+                    col = texture2D(uPanel, vec2(p.x, 1.0 - p.y));
+                }
+                vec2 d = uv - uCursor;
+                d.x *= uAspect;
+                float len = length(d);
+                if (uShowCursor > 0.5 && len < 0.012) {
+                    col = len < 0.007 ? vec4(1.0, 0.25, 0.25, 1.0) : vec4(1.0);
+                }
+                gl_FragColor = col;
+            }
+        """
+    }
+
     @Volatile var vrMode = false
+    @Volatile var mode = MODE_2D
     @Volatile var ipd = 0f          // 左右間距偏移(佔單眼寬度比例,負 = 往中間靠)
-    @Volatile var zoom = 1.4f       // VR 畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
+    @Volatile var zoom = 1.4f       // 平面模式畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
     @Volatile var distortion = 0.15f // 桶形校正強度
     @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
-    @Volatile var gap = 0f          // 兩眼畫面中間的黑色空隙(佔整個寬度比例),減少看到另一眼畫面的雙影
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
-    @Volatile var stereo = 0        // 0 = 2D, 1 = 左右3D(左半給左眼), 2 = 上下3D(上半給左眼)
+    @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
     @Volatile var showCursor = false
     @Volatile var showPanel = false
     @Volatile var cursorX = 0.5f    // 0~1,原始畫面座標
     @Volatile var cursorY = 0.5f
 
+    /** 影片在網頁畫面中的位置 [x, y, 寬, 高](比例,y 向上);整頁 = [0,0,1,1] */
+    @Volatile var crop = floatArrayOf(0f, 0f, 1f, 1f)
+
+    /** VR180 頭部方向:把「相機座標的視線」轉成「影片座標」的 3x3 矩陣(直行優先) */
+    @Volatile var head = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+
     private var surfaceTexture: SurfaceTexture? = null
     @Volatile private var frameAvailable = false
     private val stMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
 
-    private var program = 0
     private var texId = 0
     private var viewW = 1
     private var viewH = 1
+
+    // 平面影片
+    private var program = 0
     private var aPos = 0; private var aUv = 0
     private var uSt = 0; private var uTex = 0; private var uK = 0
     private var uTilt = 0; private var uSrc = 0
+
+    // VR180
+    private var program180 = 0
+    private var bPos = 0; private var bUv = 0
+    private var bSt = 0; private var bTex = 0; private var bK = 0
+    private var bHead = 0; private var bTan = 0; private var bSrc = 0
 
     // 疊加層(游標 + 控制面板)
     private var overlay = 0
@@ -98,6 +227,16 @@ class VrRenderer(
         uK = GLES20.glGetUniformLocation(program, "uK")
         uTilt = GLES20.glGetUniformLocation(program, "uTilt")
         uSrc = GLES20.glGetUniformLocation(program, "uSrc")
+
+        program180 = buildProgram(VS, FS_180)
+        bPos = GLES20.glGetAttribLocation(program180, "aPos")
+        bUv = GLES20.glGetAttribLocation(program180, "aUv")
+        bSt = GLES20.glGetUniformLocation(program180, "uSt")
+        bTex = GLES20.glGetUniformLocation(program180, "uTex")
+        bK = GLES20.glGetUniformLocation(program180, "uK")
+        bHead = GLES20.glGetUniformLocation(program180, "uHead")
+        bTan = GLES20.glGetUniformLocation(program180, "uTan")
+        bSrc = GLES20.glGetUniformLocation(program180, "uSrc")
 
         overlay = buildProgram(VS, OVERLAY_FS)
         oPos = GLES20.glGetAttribLocation(overlay, "aPos")
@@ -154,49 +293,64 @@ class VrRenderer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        if (vrMode) {
-            synchronized(panelLock) {
-                if (panelDirty) {
-                    GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
-                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
-                    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, panelBitmap, 0)
-                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                    panelDirty = false
-                }
+        if (!vrMode) {
+            val r = fitRect(viewW.toFloat(), viewH.toFloat())
+            GLES20.glViewport(r[0].toInt(), r[1].toInt(), r[2].toInt(), r[3].toInt())
+            drawVideo(0f, 0f, 1f, 1f, 0f, 0f)
+            return
+        }
+
+        synchronized(panelLock) {
+            if (panelDirty) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, panelBitmap, 0)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                panelDirty = false
             }
-            val eyeW = viewW / 2
-            val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
-            val mode = stereo
-            GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
-            for (eye in 0..1) {
-                val r = fitRect(eyeW.toFloat(), viewH.toFloat())
-                val side = if (eye == 0) -1f else 1f
-                // ipd < 0:兩眼畫面往中間靠;ipd > 0:往外拉開
-                val cx = eye * eyeW + eyeW / 2f + ipd * eyeW * side
-                val cy = viewH / 2f
-                // 中間空隙:左眼裁掉右緣、右眼裁掉左緣
-                if (eye == 0) GLES20.glScissor(0, 0, eyeW - halfGap, viewH)
-                else GLES20.glScissor(eyeW + halfGap, 0, eyeW - halfGap, viewH)
+        }
+
+        val eyeW = viewW / 2
+        val halfGap = (GAP * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
+        val m = mode
+        // 平面 2D 模式看整頁;其他模式只取網頁中的影片區域
+        val c = if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop
+        GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+        for (eye in 0..1) {
+            val r = fitRect(eyeW.toFloat(), viewH.toFloat())
+            val side = if (eye == 0) -1f else 1f
+            // ipd < 0:兩眼畫面往中間靠;ipd > 0:往外拉開
+            val shift = ipd * eyeW * side
+            val cx = eye * eyeW + eyeW / 2f + shift
+            val cy = viewH / 2f
+            // 中間空隙:左眼裁掉右緣、右眼裁掉左緣
+            if (eye == 0) GLES20.glScissor(0, 0, eyeW - halfGap, viewH)
+            else GLES20.glScissor(eyeW + halfGap, 0, eyeW - halfGap, viewH)
+
+            // 這隻眼睛取來源的哪一塊(左右3D 只取自己那一半)
+            val half = m == MODE_SBS || m == MODE_VR180
+            val hx = if (half) 0.5f else 1f
+            val ho = if (half && eye == 1) 0.5f else 0f
+            val sx = hx * c[2]
+            val sy = c[3]
+            val ox = c[0] + ho * c[2]
+            val oy = c[1]
+
+            if (m == MODE_VR180) {
+                GLES20.glViewport((cx - eyeW / 2f).toInt(), 0, eyeW, viewH)
+                draw180(sx, sy, ox, oy, eyeW.toFloat() / viewH)
+            } else {
                 val z = zoom
                 val vy = cy + lift * viewH
                 GLES20.glViewport(
                     (cx - r[2] * z / 2f).toInt(), (vy - r[3] * z / 2f).toInt(),
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
-                // 3D 影片:每隻眼睛只取自己那一半
-                when (mode) {
-                    1 -> drawVideo(distortion, -side * tilt, 0.5f, 1f, if (eye == 0) 0f else 0.5f, 0f)
-                    2 -> drawVideo(distortion, -side * tilt, 1f, 0.5f, 0f, if (eye == 0) 0.5f else 0f)
-                    else -> drawVideo(distortion, -side * tilt)
-                }
-                // 控制面板與游標不放大、不移動,確保完整看得到
-                GLES20.glViewport((cx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
-                drawOverlay()
+                drawVideo(distortion, -side * tilt, sx, sy, ox, oy)
             }
-        } else {
-            val r = fitRect(viewW.toFloat(), viewH.toFloat())
-            GLES20.glViewport(r[0].toInt(), r[1].toInt(), r[2].toInt(), r[3].toInt())
-            drawVideo(0f, 0f)
+            // 控制面板與游標不放大、不移動,確保完整看得到
+            GLES20.glViewport((cx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
+            drawOverlay()
         }
     }
 
@@ -209,10 +363,7 @@ class VrRenderer(
         GLES20.glEnableVertexAttribArray(uv)
     }
 
-    private fun drawVideo(
-        k: Float, tiltRad: Float,
-        sx: Float = 1f, sy: Float = 1f, ox: Float = 0f, oy: Float = 0f
-    ) {
+    private fun drawVideo(k: Float, tiltRad: Float, sx: Float, sy: Float, ox: Float, oy: Float) {
         GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -223,6 +374,22 @@ class VrRenderer(
         GLES20.glUniform1f(uTilt, tiltRad)
         GLES20.glUniform4f(uSrc, sx, sy, ox, oy)
         bindQuad(aPos, aUv)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+    }
+
+    private fun draw180(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float) {
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glUseProgram(program180)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+        GLES20.glUniform1i(bTex, 0)
+        GLES20.glUniformMatrix4fv(bSt, 1, false, stMatrix, 0)
+        GLES20.glUniform1f(bK, distortion)
+        GLES20.glUniformMatrix3fv(bHead, 1, false, head, 0)
+        val tx = tan(Math.toRadians(fovDeg / 2.0)).toFloat()
+        GLES20.glUniform2f(bTan, tx, tx / aspect)
+        GLES20.glUniform4f(bSrc, sx, sy, ox, oy)
+        bindQuad(bPos, bUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
@@ -264,79 +431,5 @@ class VrRenderer(
         GLES20.glAttachShader(p, compile(GLES20.GL_FRAGMENT_SHADER, fs))
         GLES20.glLinkProgram(p)
         return p
-    }
-
-    companion object {
-        private const val VS = """
-            attribute vec2 aPos;
-            attribute vec2 aUv;
-            varying vec2 vUv;
-            void main() {
-                vUv = aUv;
-                gl_Position = vec4(aPos, 0.0, 1.0);
-            }
-        """
-
-        // 影片用:可沿垂直軸翻轉(透視),uTilt > 0 時畫面右半往後倒
-        private const val VIDEO_VS = """
-            attribute vec2 aPos;
-            attribute vec2 aUv;
-            uniform float uTilt;
-            varying vec2 vUv;
-            void main() {
-                vUv = aUv;
-                gl_Position = vec4(aPos.x * cos(uTilt), aPos.y, 0.0, 1.0 + aPos.x * sin(uTilt) * 0.6);
-            }
-        """
-
-        private const val FS = """
-            #extension GL_OES_EGL_image_external : require
-            precision mediump float;
-            uniform samplerExternalOES uTex;
-            uniform mat4 uSt;
-            uniform float uK;
-            uniform vec4 uSrc;
-            varying vec2 vUv;
-            void main() {
-                vec2 c = vUv - 0.5;
-                float r2 = dot(c, c);
-                vec2 uv = 0.5 + c * (1.0 + uK * r2);
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                    return;
-                }
-                uv = uv * uSrc.xy + uSrc.zw;
-                gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
-            }
-        """
-
-        // 游標 + 面板,套用相同的鏡片校正,輸出預乘 alpha
-        private const val OVERLAY_FS = """
-            precision mediump float;
-            uniform sampler2D uPanel;
-            uniform float uK;
-            uniform vec4 uRect;
-            uniform float uShowPanel;
-            uniform vec2 uCursor;
-            uniform float uShowCursor;
-            uniform float uAspect;
-            varying vec2 vUv;
-            void main() {
-                vec2 c = vUv - 0.5;
-                vec2 uv = 0.5 + c * (1.0 + uK * dot(c, c));
-                vec4 col = vec4(0.0);
-                if (uShowPanel > 0.5 && uv.x >= uRect.x && uv.x <= uRect.z && uv.y >= uRect.y && uv.y <= uRect.w) {
-                    vec2 p = (uv - uRect.xy) / (uRect.zw - uRect.xy);
-                    col = texture2D(uPanel, vec2(p.x, 1.0 - p.y));
-                }
-                vec2 d = uv - uCursor;
-                d.x *= uAspect;
-                float len = length(d);
-                if (uShowCursor > 0.5 && len < 0.012) {
-                    col = len < 0.007 ? vec4(1.0, 0.25, 0.25, 1.0) : vec4(1.0);
-                }
-                gl_FragColor = col;
-            }
-        """
     }
 }

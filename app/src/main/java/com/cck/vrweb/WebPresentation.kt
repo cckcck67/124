@@ -177,6 +177,45 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         }
     }
 
+    /**
+     * 影片在網頁畫面中的位置 [x, y, 寬, 高](比例,y 向下);找不到回傳 null。
+     * player = true 時取 YouTube 播放器整塊(360 影片由播放器自己畫在畫布上)。
+     */
+    fun videoRect(player: Boolean, cb: (FloatArray?) -> Unit) {
+        js("(function(pl){var e=null;" +
+                "if(pl){e=document.getElementById('movie_player')||document.querySelector('.html5-video-player');}" +
+                "if(!e){$FIND_VIDEO e=v;}" +
+                "if(!e)return null;var r=e.getBoundingClientRect(),W=window.innerWidth,H=window.innerHeight;" +
+                "if(!W||!H||r.width<20||r.height<20)return null;" +
+                "var x=r.left,y=r.top,w=r.width,h=r.height;" +
+                // <video> 內的實際畫面(扣掉上下或左右黑邊)
+                "if(e.tagName==='VIDEO'&&e.videoWidth&&e.videoHeight){var a=e.videoWidth/e.videoHeight;" +
+                "if(a>w/h){var nh=w/a;y+=(h-nh)/2;h=nh;}else{var nw=h*a;x+=(w-nw)/2;w=nw;}}" +
+                "return [x/W,y/H,w/W,h/H];})($player)") { r ->
+            val rect = try {
+                if (r == null || r == "null") null else JSONArray(r).let { a ->
+                    FloatArray(4) { a.optDouble(it, 0.0).toFloat() }
+                }
+            } catch (e: Exception) { null }
+            cb(rect)
+        }
+    }
+
+    /** 設定 YouTube 360 影片的視角(度);播放器不支援時回傳 false */
+    fun ytSetView(yaw: Float, pitch: Float, fov: Float, cb: (Boolean) -> Unit) {
+        js("(function(){var p=document.getElementById('movie_player')||document.querySelector('.html5-video-player');" +
+                "if(!p||!p.setSphericalProperties)return false;" +
+                "p.setSphericalProperties({yaw:$yaw,pitch:$pitch,roll:0,fov:$fov,enableOrientationSensor:false});" +
+                "return true;})()") { cb(it == "true") }
+    }
+
+    /** 網頁目前往下捲了多少(CSS 像素) */
+    fun scrollTop(cb: (Float) -> Unit) {
+        js("(window.scrollY||document.documentElement.scrollTop||0)") { r ->
+            cb(r?.toFloatOrNull() ?: 0f)
+        }
+    }
+
     // ---------------- 網頁文字輸入框 ----------------
 
     /** (x, y) 是否點在文字輸入框上;是的話回呼 (目前內容, 提示文字, 是否密碼) */
