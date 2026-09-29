@@ -55,9 +55,9 @@ class MainActivity : Activity(), SensorEventListener {
         const val SRC_DPI = 360
 
         // 低頭控制面板(單位:弧度,以水平線為準)
-        const val MENU_OPEN = 0.52f      // 低頭約 30 度打開
-        const val MENU_CLOSE = 0.42f     // 抬頭回到約 24 度內關閉
-        const val MENU_Y_RANGE = 0.36f   // 面板最上緣到最下緣 = 低頭約 21 度
+        const val MENU_OPEN = 0.785f     // 低頭約 45 度打開
+        const val MENU_CLOSE = 0.65f     // 抬頭回到約 37 度內關閉
+        const val MENU_Y_RANGE = 0.30f   // 面板最上緣到最下緣 = 低頭約 17 度
         // 剛打開時(低頭 MENU_OPEN)游標正好在最上排空位的中間
         val MENU_Y_START = MENU_OPEN - (VrMenu.START_Y - VrMenu.Y0) / (VrMenu.Y1 - VrMenu.Y0) * MENU_Y_RANGE
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
@@ -68,8 +68,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
 
         const val TICK_MS = 400L         // 定時檢查網頁捲動 / 影片位置
-        const val YT_INTERVAL_MS = 33L   // 傳給 YouTube 360 播放器視角的間隔
-        const val YT_FAIL_LIMIT = 15     // 連續失敗幾次就改開嵌入式播放器
+        const val PULL_SHOW_PX = 120f    // 網頁在最上面時往下拉多少就叫出網址列
     }
 
     private lateinit var prefs: SharedPreferences
@@ -89,12 +88,13 @@ class MainActivity : Activity(), SensorEventListener {
     private var vrMode = false
     private var settingsOpen = false
     private var ticking = false
+    private var lastScrollY = 0f
+    private var barSuppressed = false   // 剛輸入網址:先隱藏網址列,等再次拉到最上面才出現
 
     // 頭部方向
     private val rot = FloatArray(9)
     private var reverseLandscape = false
     private var lastYaw = 0f
-    private var lastPitch = 0f
     private var frontYaw = Float.NaN  // VR180 / 360 的「正前方」
     private var basePitch = 0f        // 0 = 水平線;長按螢幕可改成目前角度(躺著看時)
     private var recenter = false
@@ -104,18 +104,11 @@ class MainActivity : Activity(), SensorEventListener {
     private var menuOpen = false
     private var menuOpenedAt = 0L
     private var menuYaw = 0f          // 面板打開時的面向 = 面板正中間
-    private var menuPitch = 0f
     private var hoverStart = 0L
     private var hoverAnchorX = 0f
     private var dwellDone = false
     private var lastPanelDraw = 0L
     private var lastStatusPoll = 0L
-
-    // YouTube 360
-    private var ytBusy = false
-    private var ytLast = 0L
-    private var ytFails = 0
-    private var ytEmbedTried = ""
 
     // 2D 模式點擊偵測(用來判斷是否點到網頁文字框)
     private var downX = 0f
@@ -301,6 +294,15 @@ class MainActivity : Activity(), SensorEventListener {
         urlInput.setText(url)
         presentation?.loadUrl(url)
         hideKeyboard()
+        // 前往新網址後先收起網址列,再次拉到最上面時才出現
+        barSuppressed = true
+        topBar.visibility = View.GONE
+    }
+
+    private fun updateTopBar() {
+        if (vrMode) return
+        val show = settingsOpen || urlInput.hasFocus() || (!barSuppressed && lastScrollY <= 4f)
+        topBar.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     private fun showKeyboard() {
@@ -365,14 +367,14 @@ class MainActivity : Activity(), SensorEventListener {
                 if (!vrMode) {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
-                        if (vrMode) return@scrollTop
-                        val show = y <= 4f || settingsOpen || urlInput.hasFocus()
-                        topBar.visibility = if (show) View.VISIBLE else View.GONE
+                        lastScrollY = y
+                        if (y > 4f) barSuppressed = false   // 往下捲過,之後回到最上面就會出現
+                        updateTopBar()
                     }
                 }
                 if (renderer.vrMode && renderer.mode != VrRenderer.MODE_2D) {
                     // 找出影片在網頁中的位置,VR 畫面只取影片本身
-                    p.videoRect(renderer.mode == VrRenderer.MODE_YT360) { r ->
+                    p.videoRect(false) { r ->
                         renderer.crop = if (r == null) floatArrayOf(0f, 0f, 1f, 1f) else {
                             val x = r[0].coerceIn(0f, 1f)
                             val y = r[1].coerceIn(0f, 1f)
@@ -398,7 +400,6 @@ class MainActivity : Activity(), SensorEventListener {
         topBar.visibility = if (on) View.GONE else View.VISIBLE
         reverseLandscape = displayRotation() == Surface.ROTATION_270
         frontYaw = Float.NaN
-        ytFails = 0
         hideKeyboard()
         hideSystemBars()
     }
@@ -407,9 +408,6 @@ class MainActivity : Activity(), SensorEventListener {
     private fun displayRotation(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation ?: Surface.ROTATION_90
         else windowManager.defaultDisplay.rotation
-
-    /** 面板要用「點一下」開關的模式(低頭是在看影片內容) */
-    private fun tapMenuMode() = renderer.mode == VrRenderer.MODE_VR180 || renderer.mode == VrRenderer.MODE_YT360
 
     // ---------------- 觸控 ----------------
 
@@ -443,6 +441,12 @@ class MainActivity : Activity(), SensorEventListener {
         e.source = InputDevice.SOURCE_TOUCHSCREEN
         presentation?.dispatchTouch(e)
         e.recycle()
+
+        // 網頁在最上面時往下拉 → 叫出網址列
+        if (action == MotionEvent.ACTION_MOVE && ev.y - downY > PULL_SHOW_PX && lastScrollY <= 4f) {
+            barSuppressed = false
+            updateTopBar()
+        }
 
         // 點一下(不是滑動)網頁文字框 → 跳出輸入視窗,用手機鍵盤打字
         if (action == MotionEvent.ACTION_DOWN) {
@@ -493,11 +497,7 @@ class MainActivity : Activity(), SensorEventListener {
     /** VR 模式點一下螢幕 / 按遙控器確認鍵 */
     private fun onSelect() {
         when {
-            menuOpen -> when {
-                menu.hover != VrMenu.NONE -> activate(menu.hover)
-                tapMenuMode() -> setMenu(false)     // 點空白處收起面板
-            }
-            tapMenuMode() -> setMenu(true)          // VR180 / 360:點一下叫出面板
+            menuOpen -> if (menu.hover != VrMenu.NONE) activate(menu.hover)
             else -> presentation?.togglePlay()      // 沒開面板時點一下 = 播放/暫停
         }
     }
@@ -548,7 +548,6 @@ class MainActivity : Activity(), SensorEventListener {
         val yaw = atan2(f0, f1)
         val pitch = asin(f2.coerceIn(-1f, 1f))
         lastYaw = yaw
-        lastPitch = pitch
         if (frontYaw.isNaN()) frontYaw = yaw
         if (recenter) {
             frontYaw = yaw
@@ -559,34 +558,20 @@ class MainActivity : Activity(), SensorEventListener {
         // 影片座標:正前方(水平)、右方、正上方
         val sy = sin(frontYaw); val cy = cos(frontYaw)
         val mode = renderer.mode
-        if (mode == VrRenderer.MODE_VR180) {
+        if (VrRenderer.isSphere(mode)) {
             // 相機座標(右、上、前) → 影片座標(右、上、前),直行優先
             renderer.head = floatArrayOf(
                 r0 * cy - r1 * sy, r2, r0 * sy + r1 * cy,
                 u0 * cy - u1 * sy, u2, u0 * sy + u1 * cy,
                 f0 * cy - f1 * sy, f2, f0 * sy + f1 * cy
             )
-        } else if (mode == VrRenderer.MODE_YT360) {
-            val fx = f0 * cy - f1 * sy
-            val fz = f0 * sy + f1 * cy
-            var yawDeg = Math.toDegrees(atan2(fx, fz).toDouble()).toFloat()
-            if (yawDeg < 0) yawDeg += 360f
-            val pitchDeg = Math.toDegrees(pitch.toDouble()).toFloat()
-            sendYtView(yawDeg, pitchDeg)
         }
 
-        // ---- 控制面板 ----
-        val down: Float
-        if (tapMenuMode()) {
-            if (!menuOpen) return
-            down = MENU_OPEN + (menuPitch - pitch)
-        } else {
-            down = basePitch - pitch   // 低頭角度
-            // 低頭打開控制面板,抬頭關閉
-            if (!menuOpen && down > MENU_OPEN) setMenu(true)
-            else if (menuOpen && down < MENU_CLOSE) setMenu(false)
-            if (!menuOpen) return
-        }
+        // ---- 控制面板:低頭打開,抬頭關閉 ----
+        val down = basePitch - pitch   // 低頭角度
+        if (!menuOpen && down > MENU_OPEN) setMenu(true)
+        else if (menuOpen && down < MENU_CLOSE) setMenu(false)
+        if (!menuOpen) return
 
         var dYaw = yaw - menuYaw
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
@@ -597,49 +582,6 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorX += (tx - renderer.cursorX) * SMOOTH
         renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
         updateMenu(SystemClock.uptimeMillis())
-    }
-
-    // ---------------- YouTube 360 ----------------
-
-    private fun sendYtView(yawDeg: Float, pitchDeg: Float) {
-        val now = SystemClock.uptimeMillis()
-        if (ytBusy || now - ytLast < YT_INTERVAL_MS || yawDeg.isNaN() || pitchDeg.isNaN()) return
-        val p = presentation ?: return
-        ytBusy = true
-        ytLast = now
-        p.ytSetView(yawDeg, pitchDeg, renderer.fovDeg) { ok ->
-            ytBusy = false
-            if (ok) {
-                ytFails = 0
-                menu.note = ""
-            } else {
-                ytFails++
-                menu.note = "找不到 360 播放器"
-                if (ytFails == YT_FAIL_LIMIT) tryYtEmbed()
-            }
-        }
-    }
-
-    /** 手機版 YouTube 網頁不支援控制視角時,改用嵌入式播放器開同一部影片 */
-    private fun tryYtEmbed() {
-        val url = presentation?.currentUrl ?: return
-        val id = youtubeId(url) ?: return
-        if (url.contains("/embed/") || ytEmbedTried == id) return
-        ytEmbedTried = id
-        ytFails = 0
-        val start = if (menu.hasVideo) menu.current.toInt() else 0
-        presentation?.loadUrl("https://www.youtube.com/embed/$id?autoplay=1&playsinline=1&start=$start")
-    }
-
-    private fun youtubeId(url: String): String? {
-        val u = Uri.parse(url)
-        val host = u.host ?: return null
-        if (!host.contains("youtube.com") && !host.contains("youtu.be")) return null
-        u.getQueryParameter("v")?.let { return it }
-        val seg = u.pathSegments
-        if (host.contains("youtu.be")) return seg.firstOrNull()
-        val i = seg.indexOfFirst { it == "shorts" || it == "embed" || it == "live" }
-        return if (i >= 0 && i + 1 < seg.size) seg[i + 1] else null
     }
 
     // ---------------- 控制面板 ----------------
@@ -653,8 +595,8 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorY = VrMenu.START_Y   // 從最上排空位開始,不會直接落在按鈕上
         menuOpenedAt = SystemClock.uptimeMillis()
         menuYaw = lastYaw
-        menuPitch = lastPitch
         menu.hover = VrMenu.NONE
+        menu.popup = VrMenu.NONE
         menu.dwell = 0f
         dwellDone = false
         if (open) {
@@ -673,6 +615,8 @@ class MainActivity : Activity(), SensorEventListener {
             hoverStart = now
             hoverAnchorX = cx
             dwellDone = false
+            // 看到別的按鈕 → 收起拉出的選項
+            if (t in 0 until VrMenu.OPTION && t != VrMenu.BAR && t != menu.popup) menu.popup = VrMenu.NONE
         }
         if (t == VrMenu.BAR) {
             menu.hoverFrac = menu.barFraction(cx)
@@ -708,19 +652,25 @@ class MainActivity : Activity(), SensorEventListener {
                 p.seekTo(menu.hoverFrac)
                 menu.current = menu.hoverFrac * menu.duration
             }
-            VrMenu.BTN_BACK -> p.seekBy(-10)
             VrMenu.BTN_PLAY -> p.togglePlay()
             VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
-            VrMenu.BTN_MODE -> {
-                val m = (renderer.mode + 1) % VrMenu.MODE_NAMES.size
-                renderer.mode = m
-                menu.mode = m
-                menu.note = ""
-                prefs.edit().putInt("mode", m).apply()
-                frontYaw = lastYaw   // 切到 VR180 / 360 時,目前面向 = 影片正前方
-                ytFails = 0
+            // 速度 / 模式:在上方拉出選項(再看一次收起)
+            VrMenu.BTN_SPEED, VrMenu.BTN_MODE ->
+                menu.popup = if (menu.popup == target) VrMenu.NONE else target
+            else -> if (target >= VrMenu.OPTION) {
+                val i = target - VrMenu.OPTION
+                if (menu.popup == VrMenu.BTN_SPEED) {
+                    menu.speed = i
+                    p.setSpeed(VrMenu.SPEEDS[i])
+                } else if (menu.popup == VrMenu.BTN_MODE) {
+                    renderer.mode = i
+                    menu.mode = i
+                    prefs.edit().putInt("mode", i).apply()
+                    frontYaw = lastYaw   // 切到 VR180 / 360 時,目前面向 = 影片正前方
+                }
+                menu.popup = VrMenu.NONE
             }
         }
         handler.postDelayed({ pollStatus() }, 300)

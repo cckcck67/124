@@ -179,7 +179,7 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
 
     /**
      * 影片在網頁畫面中的位置 [x, y, 寬, 高](比例,y 向下);找不到回傳 null。
-     * player = true 時取 YouTube 播放器整塊(360 影片由播放器自己畫在畫布上)。
+     * player = true 時取 YouTube 播放器整塊。
      */
     fun videoRect(player: Boolean, cb: (FloatArray?) -> Unit) {
         js("(function(pl){var e=null;" +
@@ -201,12 +201,9 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         }
     }
 
-    /** 設定 YouTube 360 影片的視角(度);播放器不支援時回傳 false */
-    fun ytSetView(yaw: Float, pitch: Float, fov: Float, cb: (Boolean) -> Unit) {
-        js("(function(){var p=document.getElementById('movie_player')||document.querySelector('.html5-video-player');" +
-                "if(!p||!p.setSphericalProperties)return false;" +
-                "p.setSphericalProperties({yaw:$yaw,pitch:$pitch,roll:0,fov:$fov,enableOrientationSensor:false});" +
-                "return true;})()") { cb(it == "true") }
+    /** 播放速度(1 = 正常) */
+    fun setSpeed(rate: Float) {
+        js("(function(){$FIND_VIDEO if(v)v.playbackRate=$rate;})()")
     }
 
     /** 網頁目前往下捲了多少(CSS 像素) */
