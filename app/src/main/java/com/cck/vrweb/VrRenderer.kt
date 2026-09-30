@@ -36,10 +36,8 @@ class VrRenderer(
         /** 需要依頭部方向顯示的球面模式 */
         fun isSphere(m: Int) = m == MODE_VR180
 
-        // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影。
-        // VR180 畫面填滿整個眼睛,空隙太大會變成中間一大條黑,所以用小一點
-        const val GAP = 0.1f
-        const val GAP_SPHERE = 0.03f
+        const val HUD = 256          // 倒數數字點陣圖大小
+        private const val HUD_H = 0.3f   // 倒數數字高度(佔面板層高度比例)
 
         // 影片用:可沿垂直軸翻轉(透視),uTilt > 0 時畫面右半往後倒
         private const val VIDEO_VS = """
@@ -125,14 +123,22 @@ class VrRenderer(
             uniform vec2 uCursor;
             uniform float uShowCursor;
             uniform float uAspect;
+            uniform sampler2D uHud;
+            uniform vec4 uHudRect;
+            uniform float uShowHud;
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv - 0.5;
                 vec2 uv = 0.5 + c * (1.0 + uK * dot(c, c));
                 vec4 col = vec4(0.0);
+                if (uShowHud > 0.5 && uv.x >= uHudRect.x && uv.x <= uHudRect.z && uv.y >= uHudRect.y && uv.y <= uHudRect.w) {
+                    vec2 p = (uv - uHudRect.xy) / (uHudRect.zw - uHudRect.xy);
+                    col = texture2D(uHud, vec2(p.x, 1.0 - p.y));
+                }
                 if (uShowPanel > 0.5 && uv.x >= uRect.x && uv.x <= uRect.z && uv.y >= uRect.y && uv.y <= uRect.w) {
                     vec2 p = (uv - uRect.xy) / (uRect.zw - uRect.xy);
-                    col = texture2D(uPanel, vec2(p.x, 1.0 - p.y));
+                    vec4 pc = texture2D(uPanel, vec2(p.x, 1.0 - p.y));
+                    col = pc + col * (1.0 - pc.a);
                 }
                 vec2 d = uv - uCursor;
                 d.x *= uAspect;
@@ -153,6 +159,12 @@ class VrRenderer(
     @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
     @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
+    // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影。
+    // VR180 畫面填滿整個眼睛,空隙太大會變成中間一大條黑,所以分開設定
+    @Volatile var gapFlat = 0.1f
+    @Volatile var gapSphere = 0.03f
+    @Volatile var panelDepth = 0f   // 面板距離:兩眼面板往中間移(正 = 看起來較近,佔單眼寬度比例)
+    @Volatile var showHud = false   // 畫面正中央的倒數數字
     @Volatile var showCursor = false
     @Volatile var showPanel = false
     @Volatile var cursorX = 0.5f    // 0~1,原始畫面座標
@@ -190,6 +202,10 @@ class VrRenderer(
     private var oPos = 0; private var oUv = 0
     private var oPanel = 0; private var oK = 0; private var oRect = 0; private var oShowPanel = 0
     private var oCursor = 0; private var oShowCursor = 0; private var oAspect = 0
+    private var oHud = 0; private var oHudRect = 0; private var oShowHud = 0
+    private var hudTex = 0
+    private val hudBitmap = Bitmap.createBitmap(HUD, HUD, Bitmap.Config.ARGB_8888)
+    private var hudDirty = false
 
     private val panelLock = Any()
     private val panelBitmap = Bitmap.createBitmap(VrMenu.W, VrMenu.H, Bitmap.Config.ARGB_8888)
@@ -213,6 +229,14 @@ class VrRenderer(
         var rh = w / a
         if (rh > h) { rh = h; rw = h * a }
         return floatArrayOf((w - rw) / 2f, (h - rh) / 2f, rw, rh)
+    }
+
+    /** 在主執行緒畫倒數數字;畫完後下一個畫格上傳成材質 */
+    fun updateHud(draw: (Bitmap) -> Unit) {
+        synchronized(panelLock) {
+            draw(hudBitmap)
+            hudDirty = true
+        }
     }
 
     /** 在主執行緒畫面板;畫完後下一個畫格上傳成材質 */
@@ -253,6 +277,9 @@ class VrRenderer(
         oCursor = GLES20.glGetUniformLocation(overlay, "uCursor")
         oShowCursor = GLES20.glGetUniformLocation(overlay, "uShowCursor")
         oAspect = GLES20.glGetUniformLocation(overlay, "uAspect")
+        oHud = GLES20.glGetUniformLocation(overlay, "uHud")
+        oHudRect = GLES20.glGetUniformLocation(overlay, "uHudRect")
+        oShowHud = GLES20.glGetUniformLocation(overlay, "uShowHud")
 
         val ids = IntArray(1)
         GLES20.glGenTextures(1, ids, 0)
@@ -265,7 +292,15 @@ class VrRenderer(
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        synchronized(panelLock) { panelDirty = true }  // GL 環境重建後要重新上傳
+        GLES20.glGenTextures(1, ids, 0)
+        hudTex = ids[0]
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, hudTex)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        synchronized(panelLock) { panelDirty = true; hudDirty = true }  // GL 環境重建後要重新上傳
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
@@ -313,11 +348,18 @@ class VrRenderer(
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
                 panelDirty = false
             }
+            if (hudDirty) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, hudTex)
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, hudBitmap, 0)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                hudDirty = false
+            }
         }
 
         val eyeW = viewW / 2
         val m = mode
-        val gap = if (isSphere(m)) GAP_SPHERE else GAP
+        val gap = if (isSphere(m)) gapSphere else gapFlat
         val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
         // 平面 2D 模式看整頁;其他模式只取網頁中的影片區域
         val c = if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop
@@ -352,8 +394,10 @@ class VrRenderer(
                 )
                 drawVideo(distortion, -side * tilt, sx, sy, ox, oy)
             }
-            // 控制面板與游標不放大、不移動,確保完整看得到
-            GLES20.glViewport((cx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
+            // 控制面板與游標不放大、不移動,確保完整看得到;
+            // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
+            val ocx = cx - side * panelDepth * eyeW
+            GLES20.glViewport((ocx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
             drawOverlay()
         }
     }
@@ -400,7 +444,8 @@ class VrRenderer(
     private fun drawOverlay() {
         val panel = showPanel
         val cursor = showCursor
-        if (!panel && !cursor) return
+        val hud = showHud
+        if (!panel && !cursor && !hud) return
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)  // 點陣圖是預乘 alpha
         GLES20.glUseProgram(overlay)
@@ -414,6 +459,13 @@ class VrRenderer(
         GLES20.glUniform2f(oCursor, cursorX, 1f - cursorY)
         GLES20.glUniform1f(oShowCursor, if (cursor) 1f else 0f)
         GLES20.glUniform1f(oAspect, srcW.toFloat() / srcH)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, hudTex)
+        GLES20.glUniform1i(oHud, 2)
+        // 倒數數字:正中央的正方形
+        val hw = HUD_H * srcH / srcW / 2f
+        GLES20.glUniform4f(oHudRect, 0.5f - hw, 0.5f - HUD_H / 2f, 0.5f + hw, 0.5f + HUD_H / 2f)
+        GLES20.glUniform1f(oShowHud, if (hud) 1f else 0f)
         bindQuad(oPos, oUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisable(GLES20.GL_BLEND)

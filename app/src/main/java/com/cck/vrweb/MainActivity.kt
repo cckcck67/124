@@ -3,7 +3,9 @@ package com.cck.vrweb
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.SharedPreferences
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -63,7 +65,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
         const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
-        const val RECENTER_DELAY_MS = 2000L  // 按「置中」後,給時間抬頭看正前方
+        const val RECENTER_DELAY_MS = 3000L  // 按「置中」後倒數 3 秒,給時間抬頭看正前方
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
         const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
@@ -136,6 +138,9 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.lift = prefs.getFloat("lift", 0.05f)
         renderer.zoom = prefs.getFloat("zoom", 1.4f)
         renderer.fovDeg = prefs.getFloat("fov", 90f)
+        renderer.gapFlat = prefs.getFloat("gapFlat", 0.1f)
+        renderer.gapSphere = prefs.getFloat("gapSphere", 0.03f)
+        renderer.panelDepth = prefs.getFloat("panelDepth", 0f)
         renderer.mode = prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1)
         menu.mode = renderer.mode
 
@@ -202,6 +207,18 @@ class MainActivity : Activity(), SensorEventListener {
             addView(slider("VR視野", renderer.fovDeg, 60f, 120f, "%.0f度") {
                 renderer.fovDeg = it; save("fov", it)
             }, weight())
+            addView(slider("面板距離", renderer.panelDepth, -0.1f, 0.1f, "%+.3f") {
+                renderer.panelDepth = it; save("panelDepth", it)
+            }, weight())
+        }
+        val row3 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(slider("中間空隙(平面)", renderer.gapFlat, 0f, 0.2f, "%.3f") {
+                renderer.gapFlat = it; save("gapFlat", it)
+            }, weight())
+            addView(slider("中間空隙(VR180)", renderer.gapSphere, 0f, 0.2f, "%.3f") {
+                renderer.gapSphere = it; save("gapSphere", it)
+            }, weight())
         }
         settingsPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -209,6 +226,7 @@ class MainActivity : Activity(), SensorEventListener {
             visibility = View.GONE
             addView(row1)
             addView(row2)
+            addView(row3)
         }
 
         // 網址列與設定面板疊在畫面上,出現/隱藏時網頁大小不變
@@ -407,6 +425,7 @@ class MainActivity : Activity(), SensorEventListener {
         reverseLandscape = displayRotation() == Surface.ROTATION_270
         needLevelRef = true
         recenterAt = 0L
+        renderer.showHud = false
         hideKeyboard()
         hideSystemBars()
     }
@@ -570,6 +589,7 @@ class MainActivity : Activity(), SensorEventListener {
             refF[0] = f0; refF[1] = f1; refF[2] = f2
             recenter = false
             recenterAt = 0L
+            renderer.showHud = false
         }
 
         if (VrRenderer.isSphere(renderer.mode)) {
@@ -675,7 +695,7 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:給兩秒抬頭看想要的正前方,再以當時的方向為準
-            VrMenu.BTN_RECENTER -> recenterAt = SystemClock.uptimeMillis() + RECENTER_DELAY_MS
+            VrMenu.BTN_RECENTER -> startRecenterCountdown()
             // 速度 / 模式:在上方拉出選項(再看一次收起)
             VrMenu.BTN_SPEED, VrMenu.BTN_MODE ->
                 menu.popup = if (menu.popup == target) VrMenu.NONE else target
@@ -694,6 +714,50 @@ class MainActivity : Activity(), SensorEventListener {
         }
         handler.postDelayed({ pollStatus() }, 300)
         redrawPanel(force = true)
+    }
+
+    // ---------------- 置中倒數 ----------------
+
+    private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        textSize = VrRenderer.HUD * 0.7f
+        isFakeBoldText = true
+    }
+
+    private fun startRecenterCountdown() {
+        recenterAt = SystemClock.uptimeMillis() + RECENTER_DELAY_MS
+        handler.removeCallbacks(countdown)
+        handler.post(countdown)
+    }
+
+    /** 畫面正中央顯示 3、2、1,時間到由感測器那邊完成置中並隱藏數字 */
+    private val countdown = object : Runnable {
+        override fun run() {
+            if (recenterAt == 0L || !vrMode) { renderer.showHud = false; return }
+            val left = recenterAt - SystemClock.uptimeMillis()
+            if (left <= 0) return
+            val n = ((left + 999) / 1000).toInt()
+            renderer.updateHud { b -> drawCountdown(b, n) }
+            renderer.showHud = true
+            handler.postDelayed(this, (left - (n - 1) * 1000L).coerceIn(20L, 1000L))
+        }
+    }
+
+    private fun drawCountdown(b: android.graphics.Bitmap, n: Int) {
+        b.eraseColor(0)
+        val c = Canvas(b)
+        val h = VrRenderer.HUD.toFloat()
+        hudPaint.style = Paint.Style.FILL
+        hudPaint.color = 0xAA000000.toInt()
+        c.drawCircle(h / 2, h / 2, h / 2 - 4, hudPaint)
+        val y = h / 2 - (hudPaint.descent() + hudPaint.ascent()) / 2
+        hudPaint.style = Paint.Style.STROKE
+        hudPaint.strokeWidth = 14f
+        hudPaint.color = 0xFF000000.toInt()
+        c.drawText(n.toString(), h / 2, y, hudPaint)
+        hudPaint.style = Paint.Style.FILL
+        hudPaint.color = 0xFFFFFFFF.toInt()
+        c.drawText(n.toString(), h / 2, y, hudPaint)
     }
 
     private fun changeVolume(direction: Int) {
