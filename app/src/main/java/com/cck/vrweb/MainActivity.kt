@@ -583,9 +583,13 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     @Suppress("DEPRECATION")
-    private fun displayRotation(): Int =
+    private fun displayRotation(): Int = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation ?: Surface.ROTATION_90
         else windowManager.defaultDisplay.rotation
+    } catch (e: Exception) {
+        // 少數裝置/環境拿不到 display 時,不要讓 App 閃退
+        try { windowManager.defaultDisplay.rotation } catch (e2: Exception) { Surface.ROTATION_90 }
+    }
 
     // ---------------- 觸控 ----------------
 
