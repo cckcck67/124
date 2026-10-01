@@ -9,7 +9,8 @@ import android.graphics.RectF
  * 控制面板。坐姿:低頭叫出,放在畫面下方;躺平:抬頭叫出,放在畫面上方。
  * 各排由「靠近畫面中央」往外依序是:
  * 空白列(游標從這裡開始,不會誤觸)→ 進度條 → 按鈕 → 資訊列。
- * 「速度」「模式」按鈕會拉出選項列,看著選項就能選;選項拉出時其他按鈕暫停作用。
+ * 「模式」按鈕會拉出選項列,看著選項就能選;選項拉出時其他按鈕暫停作用。
+ * 「設定」按鈕切換到設定頁:每項有 − / + 按鈕,邊看邊調。
  * 用「注視停留」選取(看著不動一下子就觸發),不用打開 VR 盒子點螢幕。
  * 座標:cx, cy 為畫面比例(0~1,y 向下)。
  */
@@ -42,19 +43,27 @@ class VrMenu {
         const val NONE = -1
         const val BAR = 100
         const val OPTION = 200               // 選項列第 i 個 = OPTION + i
+        const val SET_BACK = 290             // 設定頁的「返回」
+        const val SET_MINUS = 300            // 設定頁第 i 項的 − = SET_MINUS + 2i,+ = SET_MINUS + 2i + 1
         const val BTN_POSTURE = 0
         const val BTN_VOL_DOWN = 1
         const val BTN_VOL_UP = 2
         const val BTN_FWD = 3
-        const val BTN_SPEED = 4
-        const val BTN_MODE = 5
-        const val BTN_RECENTER = 6
-        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "速度", "模式", "置中")
+        const val BTN_MODE = 4
+        const val BTN_RECENTER = 5
+        const val BTN_SETTINGS = 6
+        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定")
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR")
-        val SPEEDS = floatArrayOf(0.5f, 1f, 1.5f)
-        private val SPEED_NAMES = arrayOf("0.5x", "1x", "1.5x")
+
+        // 設定頁:兩欄,每格 = 名稱與數值、−、+
+        private const val SET_COLS = 2
+        private const val SET_TOP = 80f
+        private const val SET_ROW_H = 86f
+
+        fun isSetMinus(t: Int) = t >= SET_MINUS && (t - SET_MINUS) % 2 == 0
+        fun setIndex(t: Int) = (t - SET_MINUS) / 2
 
         /** 空白列正中間(游標起始位置)的畫面比例 y */
         val START_Y get() = Y0 + yOf(START_END / 2f) / H * (Y1 - Y0)
@@ -80,8 +89,9 @@ class VrMenu {
     var volume = 0
     var volumeMax = 15
     var mode = 0            // VrRenderer.MODE_*
-    var speed = 1           // SPEEDS 的索引
-    var popup = NONE        // 目前拉出選項的按鈕(BTN_SPEED / BTN_MODE)
+    var popup = NONE        // 目前拉出選項的按鈕(BTN_MODE)
+    var settingsPage = false
+    var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -98,8 +108,30 @@ class VrMenu {
 
     private fun canSeek() = hasVideo && duration > 0
 
-    fun optionNames(): Array<String> = if (popup == BTN_SPEED) SPEED_NAMES else MODE_NAMES
-    private fun selectedOption() = if (popup == BTN_SPEED) speed else mode
+    fun optionNames(): Array<String> = MODE_NAMES
+    private fun selectedOption() = mode
+
+    // ---- 設定頁格子位置(坐姿版面座標) ----
+    private fun cellCount() = settingRows.size + 1   // 最後一格是「返回」
+    private fun cellLeft(i: Int) = ROW_L + (i % SET_COLS) * ((ROW_R - ROW_L) / SET_COLS)
+    private fun cellTop(i: Int) = SET_TOP + (i / SET_COLS) * SET_ROW_H
+    private fun cellW() = (ROW_R - ROW_L) / SET_COLS
+
+    private fun hitSettings(px: Float, py: Float): Int {
+        if (py < SET_TOP) return NONE
+        val row = ((py - SET_TOP) / SET_ROW_H).toInt()
+        val col = ((px - ROW_L) / cellW()).toInt().coerceIn(0, SET_COLS - 1)
+        val i = row * SET_COLS + col
+        if (i >= cellCount()) return NONE
+        if (i == settingRows.size) return SET_BACK
+        val x = px - cellLeft(i)
+        val w = cellW()
+        return when {
+            x > w * 0.79f -> SET_MINUS + 2 * i + 1   // +
+            x > w * 0.58f -> SET_MINUS + 2 * i       // −
+            else -> NONE
+        }
+    }
 
     /** 坐姿版面中 [a, b) 這一排在目前版面的上下緣 */
     private fun band(a: Float, b: Float): Pair<Float, Float> =
@@ -110,7 +142,9 @@ class VrMenu {
         if (cx < X0 || cx > X1 || cy < Y0 || cy > Y1) return NONE
         val px = (cx - X0) / (X1 - X0) * W
         val py = yOf((cy - Y0) / (Y1 - Y0) * H)   // 換回坐姿版面座標
-        if (py < START_END || py >= BTN_END || px < ROW_L || px > ROW_R) return NONE
+        if (px < ROW_L || px > ROW_R) return NONE
+        if (settingsPage) return hitSettings(px, py)
+        if (py < START_END || py >= BTN_END) return NONE
         if (py < BAR_END) {
             if (popup != NONE) {
                 val n = optionNames().size
@@ -144,11 +178,38 @@ class VrMenu {
         c.drawText(label, (l + r) / 2, (t + b) / 2 + 14, centerText)
     }
 
+    private fun drawSettings(c: Canvas) {
+        val w = cellW()
+        for (i in 0 until cellCount()) {
+            val l = cellLeft(i) + 6
+            val (t, bt) = band(cellTop(i) + 4, cellTop(i) + SET_ROW_H - 4)
+            if (i == settingRows.size) {
+                centerText.textSize = 36f
+                drawButton(c, l, t, l + w - 12, bt, hover == SET_BACK, if (hover == SET_BACK) dwell else 0f, "返回")
+                continue
+            }
+            val (name, value) = settingRows[i]
+            rect.set(l, t, l + w * 0.57f, bt)
+            fillPaint.color = 0xFF202020.toInt()
+            c.drawRoundRect(rect, 14f, 14f, fillPaint)
+            centerText.textSize = 32f
+            c.drawText("$name  $value", l + w * 0.285f, (t + bt) / 2 + 12, centerText)
+            centerText.textSize = 44f
+            val minus = SET_MINUS + 2 * i
+            drawButton(c, l + w * 0.59f, t, l + w * 0.78f, bt, hover == minus, if (hover == minus) dwell else 0f, "−")
+            drawButton(c, l + w * 0.80f, t, l + w - 12, bt, hover == minus + 1, if (hover == minus + 1) dwell else 0f, "+")
+        }
+    }
+
     fun draw(b: Bitmap) {
         b.eraseColor(0)
         val c = Canvas(b)
         rect.set(0f, 0f, W.toFloat(), H.toFloat())
         c.drawRoundRect(rect, 28f, 28f, bgPaint)
+        if (settingsPage) {
+            drawSettings(c)
+            return
+        }
 
         // ---- 進度條,或拉出的選項列 ----
         val (barTop, barBottom) = band(START_END, BAR_END)
@@ -196,7 +257,6 @@ class VrMenu {
         for (i in LABELS.indices) {
             val label = when (i) {
                 BTN_POSTURE -> if (lying) "躺平" else "坐姿"
-                BTN_SPEED -> "速度 ${SPEED_NAMES[speed]}"
                 BTN_MODE -> MODE_NAMES[mode]
                 else -> LABELS[i]
             }

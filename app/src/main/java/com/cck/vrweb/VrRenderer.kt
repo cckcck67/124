@@ -162,10 +162,8 @@ class VrRenderer(
     @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
     @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
-    // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影。
-    // VR180 畫面填滿整個眼睛,空隙太大會變成中間一大條黑,所以分開設定
-    @Volatile var gapFlat = 0.1f
-    @Volatile var gapSphere = 0.03f
+    // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影(每個模式各自設定)
+    @Volatile var gap = 0.1f
     @Volatile var panelDepth = 0f   // 面板距離:兩眼面板往中間移(正 = 看起來較近,佔單眼寬度比例)
     @Volatile var showHud = false   // 畫面正中央的倒數數字
     @Volatile var showCursor = false
@@ -363,7 +361,6 @@ class VrRenderer(
 
         val eyeW = viewW / 2
         val m = mode
-        val gap = if (isSphere(m)) gapSphere else gapFlat
         val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
         // 平面 2D 模式看整頁;其他模式只取網頁中的影片區域
         val c = if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop

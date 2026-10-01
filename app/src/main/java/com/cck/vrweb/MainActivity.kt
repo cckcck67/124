@@ -39,8 +39,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.SeekBar
-import android.widget.TextView
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.asin
@@ -60,13 +58,16 @@ class MainActivity : Activity(), SensorEventListener {
         // 叫出面板的角度(弧度,相對於正前方)
         const val SIT_OPEN = 0.873f      // 坐姿:低頭約 50 度打開
         const val SIT_CLOSE = 0.70f      //       回到約 40 度內關閉
-        const val LIE_OPEN = 0.436f      // 躺平:抬頭約 25 度打開
+        const val LIE_OPEN = 0.436f      // 躺平(VR180 / 上下VR):抬頭約 25 度打開
         const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
+        const val LIE_OPEN_FLAT = 0.349f // 躺平(2D / 左右3D):抬頭約 20 度打開
+        const val LIE_CLOSE_FLAT = 0.24f //       回到約 14 度內關閉
         const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
         const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
         const val RECENTER_DELAY_MS = 3000L  // 按「置中」後倒數 3 秒,給時間抬頭看正前方
+        const val ENTER_DELAY_MS = 5000L     // 進入 VR 後倒數 5 秒置中,給時間把手機放進盒子
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
         const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
@@ -84,14 +85,12 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var glView: GLSurfaceView
     private lateinit var renderer: VrRenderer
     private lateinit var topBar: LinearLayout
-    private lateinit var settingsPanel: LinearLayout
     private lateinit var urlInput: EditText
     private lateinit var gesture: GestureDetector
 
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: WebPresentation? = null
     private var vrMode = false
-    private var settingsOpen = false
     private var ticking = false
     private var lastScrollY = 0f
     private var barShown = true         // 網址列:網頁捲到最上面後再往下拉才出現,往下捲就收起
@@ -135,18 +134,9 @@ class MainActivity : Activity(), SensorEventListener {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
 
         renderer = VrRenderer(SRC_W, SRC_H) { st -> handler.post { attachSurface(st) } }
-        renderer.ipd = prefs.getFloat("ipd2", defaultIpd())
         renderer.distortion = prefs.getFloat("k", 0.15f)
-        renderer.tilt = prefs.getFloat("tilt", 0f)
-        renderer.lift = prefs.getFloat("lift", 0.05f)
-        renderer.zoom = prefs.getFloat("zoom", 1.4f)
-        renderer.fovDeg = prefs.getFloat("fov", 90f)
-        renderer.gapFlat = prefs.getFloat("gapFlat", 0.1f)
-        renderer.gapSphere = prefs.getFloat("gapSphere", 0.03f)
-        renderer.panelDepth = prefs.getFloat("panelDepth", 0f)
-        renderer.mode = prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1)
         VrMenu.lying = prefs.getBoolean("lying", false)
-        menu.mode = renderer.mode
+        setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
 
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
@@ -158,6 +148,11 @@ class MainActivity : Activity(), SensorEventListener {
         buildUi()
         setupGestures()
         hideSystemBars()
+
+        // 開啟幾秒後在背景檢查有沒有新版本(VR 模式中不打擾)
+        handler.postDelayed({
+            if (!vrMode) Updater(this) { hideSystemBars() }.check()
+        }, 3000)
     }
 
     // ---------------- 介面 ----------------
@@ -185,67 +180,17 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("←") { presentation?.handleBack() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("★") { showBookmarks() })
-            addView(button("設定") { setSettings(!settingsOpen) })
             addView(button("前往") { go() })
             addView(button("VR") { setVr(true) })
         }
 
-        // 設定面板:平常隱藏,按「設定」才出現;打開時下方畫面直接預覽 VR 效果
-        val row1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(slider("畫面大小", renderer.zoom, 1f, 2f, "%.2f倍") {
-                renderer.zoom = it; save("zoom", it)
-            }, weight())
-            addView(slider("畫面高低", renderer.lift, -0.2f, 0.2f, "%+.2f") {
-                renderer.lift = it; save("lift", it)
-            }, weight())
-            addView(slider("左右間距", renderer.ipd, -0.3f, 0.1f, "%+.2f") {
-                renderer.ipd = it; save("ipd2", it)
-            }, weight())
-        }
-        val row2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            // 以度數顯示,內部用弧度
-            addView(slider("翻轉角度", Math.toDegrees(renderer.tilt.toDouble()).toFloat(), -10f, 10f, "%+.1f度") {
-                renderer.tilt = Math.toRadians(it.toDouble()).toFloat(); save("tilt", renderer.tilt)
-            }, weight())
-            addView(slider("VR視野", renderer.fovDeg, 60f, 120f, "%.0f度") {
-                renderer.fovDeg = it; save("fov", it)
-            }, weight())
-            addView(slider("面板距離", renderer.panelDepth, -0.1f, 0.1f, "%+.3f") {
-                renderer.panelDepth = it; save("panelDepth", it)
-            }, weight())
-        }
-        val row3 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(slider("中間空隙(平面)", renderer.gapFlat, 0f, 0.2f, "%.3f") {
-                renderer.gapFlat = it; save("gapFlat", it)
-            }, weight())
-            addView(slider("中間空隙(VR180)", renderer.gapSphere, 0f, 0.2f, "%.3f") {
-                renderer.gapSphere = it; save("gapSphere", it)
-            }, weight())
-        }
-        settingsPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
-            visibility = View.GONE
-            addView(row1)
-            addView(row2)
-            addView(row3)
-            addView(button("完成") { setSettings(false) }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.END })
-        }
-
-        // 網址列與設定面板疊在畫面上,出現/隱藏時網頁大小不變
+        // 網址列疊在畫面上,出現/隱藏時網頁大小不變
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(glView, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(topBar, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
-            addView(settingsPanel, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         }
         setContentView(root)
     }
@@ -255,46 +200,68 @@ class MainActivity : Activity(), SensorEventListener {
         setOnClickListener { onClick() }
     }
 
-    private fun weight() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    // ---------------- 各模式設定(VR 面板的「設定」頁用 − / + 調整) ----------------
 
-    private fun save(key: String, v: Float) = prefs.edit().putFloat(key, v).apply()
+    /** 一個設定項目;數值依模式分開存(key 前面加 "m模式_"),def 是沒存過時的預設值 */
+    private class Setting(
+        val key: String, val name: String, val step: Float, val min: Float, val max: Float,
+        val format: String, val def: (Int) -> Float, val apply: (Float) -> Unit
+    )
 
-    private fun slider(
-        label: String, init: Float, lo: Float, hi: Float, format: String,
-        onChange: (Float) -> Unit
-    ): View {
-        val tv = TextView(this).apply {
-            text = "$label ${format.format(init)}"
-            setTextColor(Color.WHITE)
-            setPadding(24, 0, 12, 0)
-        }
-        val sb = SeekBar(this).apply {
-            max = 200
-            progress = ((init - lo) / (hi - lo) * 200).toInt().coerceIn(0, 200)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    if (!fromUser) return
-                    val v = lo + (hi - lo) * p / 200f
-                    tv.text = "$label ${format.format(v)}"
-                    onChange(v)
-                }
-                override fun onStartTrackingTouch(s: SeekBar) {}
-                override fun onStopTrackingTouch(s: SeekBar) {}
-            })
-        }
-        return LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(tv)
-            addView(sb, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
+    private val flatSettings by lazy { listOf(
+        Setting("zoom", "畫面大小", 0.05f, 1f, 2.5f, "%.2f倍", { prefs.getFloat("zoom", 1.4f) }) { renderer.zoom = it },
+        Setting("lift", "畫面高低", 0.01f, -0.3f, 0.3f, "%+.2f", { prefs.getFloat("lift", 0.05f) }) { renderer.lift = it },
+        Setting("ipd", "左右間距", 0.005f, -0.3f, 0.1f, "%+.3f", { prefs.getFloat("ipd2", defaultIpd()) }) { renderer.ipd = it },
+        Setting("tilt", "翻轉角度", 0.5f, -10f, 10f, "%+.1f度",
+            { Math.toDegrees(prefs.getFloat("tilt", 0f).toDouble()).toFloat() }) {
+            renderer.tilt = Math.toRadians(it.toDouble()).toFloat()
+        },
+        Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
+        Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
+    ) }
+
+    private val sphereSettings by lazy { listOf(
+        Setting("fov", "VR視野", 2f, 60f, 130f, "%.0f度", { prefs.getFloat("fov", 90f) }) { renderer.fovDeg = it },
+        Setting("ipd", "左右間距", 0.005f, -0.3f, 0.1f, "%+.3f", { prefs.getFloat("ipd2", defaultIpd()) }) { renderer.ipd = it },
+        Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapSphere", 0.03f) }) { renderer.gap = it },
+        Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
+    ) }
+
+    // 播放速度(所有模式共用,不存)
+    private val speeds = floatArrayOf(0.5f, 1f, 1.5f)
+    private var speedIndex = 1
+
+    private fun modeSettings(m: Int) = if (VrRenderer.isSphere(m)) sphereSettings else flatSettings
+
+    private fun settingValue(m: Int, st: Setting) = prefs.getFloat("m${m}_${st.key}", st.def(m))
+
+    /** 切換模式:套用這個模式自己存的設定 */
+    private fun setMode(m: Int) {
+        renderer.mode = m
+        menu.mode = m
+        prefs.edit().putInt("mode", m).apply()
+        for (st in modeSettings(m)) st.apply(settingValue(m, st))
     }
 
-    private fun setSettings(open: Boolean) {
-        settingsOpen = open
-        settingsPanel.visibility = if (open) View.VISIBLE else View.GONE
-        renderer.vrMode = vrMode || open   // 設定打開時預覽 VR 畫面
-        if (open) hideKeyboard()
-        updateTopBar()                     // 設定打開時只顯示滑桿,不顯示網址列
+    /** 設定頁第 i 項 + / −(最後一項是播放速度) */
+    private fun adjustSetting(i: Int, dir: Int) {
+        val m = renderer.mode
+        val list = modeSettings(m)
+        if (i == list.size) {
+            speedIndex = (speedIndex + dir).coerceIn(0, speeds.size - 1)
+            presentation?.setSpeed(speeds[speedIndex])
+            return
+        }
+        val st = list.getOrNull(i) ?: return
+        val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
+        prefs.edit().putFloat("m${m}_${st.key}", v).apply()
+        st.apply(v)
+    }
+
+    private fun refreshSettingRows() {
+        val m = renderer.mode
+        menu.settingRows = modeSettings(m).map { it.name to it.format.format(settingValue(m, it)) } +
+                ("速度" to "${speeds[speedIndex]}x")
     }
 
     /**
@@ -334,7 +301,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun updateTopBar() {
         if (vrMode) return
-        val show = !settingsOpen && (urlInput.hasFocus() || barShown)
+        val show = urlInput.hasFocus() || barShown
         topBar.visibility = if (show) View.VISIBLE else View.GONE
     }
 
@@ -508,8 +475,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun setVr(on: Boolean) {
         vrMode = on
-        if (on) setSettings(false)
-        renderer.vrMode = on || settingsOpen
+        renderer.vrMode = on
         renderer.showCursor = false
         setMenu(false)
         topBar.visibility = if (on) View.GONE else View.VISIBLE
@@ -519,6 +485,28 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showHud = false
         hideKeyboard()
         hideSystemBars()
+        if (on) {
+            autoDetectMode()
+            startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
+        }
+    }
+
+    /**
+     * 依影片比例猜格式:約 2:1 → VR180(左右兩個半球),約 1:1 → 上下VR;
+     * 其他比例若原本是球面模式就回到 2D,否則維持(2D / 左右3D 看不出來)。猜錯可用面板「模式」改。
+     */
+    private fun autoDetectMode() {
+        presentation?.videoSize { w, h ->
+            if (w <= 0 || h <= 0) return@videoSize
+            val r = w.toFloat() / h
+            val m = when {
+                r in 1.85f..2.15f -> VrRenderer.MODE_VR180
+                r in 0.9f..1.1f -> VrRenderer.MODE_TB360
+                VrRenderer.isSphere(renderer.mode) -> VrRenderer.MODE_2D
+                else -> renderer.mode
+            }
+            if (m != renderer.mode) setMode(m)
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -537,27 +525,31 @@ class MainActivity : Activity(), SensorEventListener {
         })
 
         glView.setOnTouchListener { _, ev ->
-            when {
-                vrMode -> gesture.onTouchEvent(ev)
-                settingsOpen -> {}   // 預覽中不操作網頁
-                else -> forward2D(ev)
-            }
+            if (vrMode) gesture.onTouchEvent(ev) else forward2D(ev)
             true
         }
     }
 
-    /** 2D 模式:把手指座標換算成虛擬螢幕座標,直接操作網頁 */
+    /** 2D 模式:把每根手指的座標換算成虛擬螢幕座標,直接操作網頁(雙指可縮放) */
     private fun forward2D(ev: MotionEvent) {
         val action = ev.actionMasked
-        if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_MOVE &&
-            action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL) return
         val r = renderer.fitRect(glView.width.toFloat(), glView.height.toFloat())
-        val x = (ev.x - r[0]) / r[2] * SRC_W
-        val y = (ev.y - r[1]) / r[3] * SRC_H
-        val e = MotionEvent.obtain(ev.downTime, ev.eventTime, action, x, y, 0)
-        e.source = InputDevice.SOURCE_TOUCHSCREEN
+        val n = ev.pointerCount
+        val props = Array(n) { MotionEvent.PointerProperties().also { p -> ev.getPointerProperties(it, p) } }
+        val coords = Array(n) { i ->
+            MotionEvent.PointerCoords().also { c ->
+                ev.getPointerCoords(i, c)
+                c.x = (c.x - r[0]) / r[2] * SRC_W
+                c.y = (c.y - r[1]) / r[3] * SRC_H
+            }
+        }
+        val x = coords[0].x
+        val y = coords[0].y
+        val e = MotionEvent.obtain(ev.downTime, ev.eventTime, ev.action, n, props, coords,
+            ev.metaState, ev.buttonState, 1f, 1f, ev.deviceId, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
         presentation?.dispatchTouch(e)
         e.recycle()
+        if (n > 1) return   // 雙指縮放時不做下面的單指判斷
 
         // 網頁已在最上面時再往下拉 → 叫出網址列(不會一捲到頂就擋住網頁)
         if (action == MotionEvent.ACTION_DOWN) downScrollY = lastScrollY
@@ -643,7 +635,6 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onBackPressed() {
         when {
             vrMode -> setVr(false)
-            settingsOpen -> setSettings(false)
             presentation?.handleBack() == true -> {}
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
@@ -702,8 +693,9 @@ class MainActivity : Activity(), SensorEventListener {
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
         val lying = VrMenu.lying
         val tilt = if (lying) -down else down
-        val openAt = if (lying) LIE_OPEN else SIT_OPEN
-        val closeAt = if (lying) LIE_CLOSE else SIT_CLOSE
+        val sphere = VrRenderer.isSphere(renderer.mode)
+        val openAt = if (!lying) SIT_OPEN else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
+        val closeAt = if (!lying) SIT_CLOSE else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
         if (!menuOpen && tilt > openAt) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
         if (!menuOpen) return
@@ -736,6 +728,7 @@ class MainActivity : Activity(), SensorEventListener {
         menuAz = lastAz
         menu.hover = VrMenu.NONE
         menu.popup = VrMenu.NONE
+        menu.settingsPage = false
         menu.dwell = 0f
         dwellDone = false
         if (open) {
@@ -774,6 +767,8 @@ class MainActivity : Activity(), SensorEventListener {
                 hoverStart = now - need + REPEAT_MS   // 繼續看著 = 持續調整
             } else if (t == VrMenu.BTN_FWD) {
                 hoverStart = now - need + FWD_REPEAT_MS   // 繼續看著 = 一直快進
+            } else if (t >= VrMenu.SET_MINUS) {
+                hoverStart = now - need + REPEAT_MS   // 設定的 − / + 繼續看著 = 持續調整
             } else {
                 dwellDone = true
             }
@@ -804,20 +799,23 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
             VrMenu.BTN_RECENTER -> startRecenterCountdown()
-            // 速度 / 模式:在上方拉出選項(再看一次收起)
-            VrMenu.BTN_SPEED, VrMenu.BTN_MODE ->
-                menu.popup = if (menu.popup == target) VrMenu.NONE else target
-            else -> if (target >= VrMenu.OPTION) {
-                val i = target - VrMenu.OPTION
-                if (menu.popup == VrMenu.BTN_SPEED) {
-                    menu.speed = i
-                    p.setSpeed(VrMenu.SPEEDS[i])
-                } else if (menu.popup == VrMenu.BTN_MODE) {
-                    renderer.mode = i
-                    menu.mode = i
-                    prefs.edit().putInt("mode", i).apply()
+            // 模式:在上方拉出選項(再看一次收起)
+            VrMenu.BTN_MODE -> menu.popup = if (menu.popup == target) VrMenu.NONE else target
+            // 設定:切換到設定頁(只列出目前模式用得到的項目)
+            VrMenu.BTN_SETTINGS -> {
+                refreshSettingRows()
+                menu.settingsPage = true
+            }
+            VrMenu.SET_BACK -> menu.settingsPage = false
+            else -> when {
+                target >= VrMenu.SET_MINUS -> {
+                    adjustSetting(VrMenu.setIndex(target), if (VrMenu.isSetMinus(target)) -1 else 1)
+                    refreshSettingRows()
                 }
-                menu.popup = VrMenu.NONE
+                target >= VrMenu.OPTION && menu.popup == VrMenu.BTN_MODE -> {
+                    setMode(target - VrMenu.OPTION)   // 套用這個模式自己的設定
+                    menu.popup = VrMenu.NONE
+                }
             }
         }
         handler.postDelayed({ pollStatus() }, 300)
@@ -832,13 +830,13 @@ class MainActivity : Activity(), SensorEventListener {
         isFakeBoldText = true
     }
 
-    private fun startRecenterCountdown() {
-        recenterAt = SystemClock.uptimeMillis() + RECENTER_DELAY_MS
+    private fun startRecenterCountdown(delay: Long = RECENTER_DELAY_MS) {
+        recenterAt = SystemClock.uptimeMillis() + delay
         handler.removeCallbacks(countdown)
         handler.post(countdown)
     }
 
-    /** 畫面正中央顯示 3、2、1,時間到由感測器那邊完成置中並隱藏數字 */
+    /** 畫面正中央倒數(5、4…或 3、2、1),時間到由感測器那邊完成置中並隱藏數字 */
     private val countdown = object : Runnable {
         override fun run() {
             if (recenterAt == 0L || !vrMode) { renderer.showHud = false; return }

@@ -50,6 +50,10 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
             mediaPlaybackRequiresUserGesture = false
             useWideViewPort = true
             loadWithOverviewMode = true
+            // 雙指縮放(不顯示縮放按鈕)
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
             userAgentString = userAgentString.replace("; wv", "")
         }
@@ -57,6 +61,11 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme ?: return true
                 return scheme != "http" && scheme != "https" // 擋掉 intent:// 等跳 App 的連結
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                // 有些網站禁止縮放,把限制拿掉,讓雙指可以放大縮小
+                view.evaluateJavascript(ALLOW_ZOOM, null)
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
@@ -204,6 +213,18 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         }
     }
 
+    /** 影片原始寬高(像素);找不到影片回傳 null */
+    fun videoSize(cb: (Int, Int) -> Unit) {
+        js("(function(){$FIND_VIDEO if(!v||!v.videoWidth)return null;return [v.videoWidth,v.videoHeight];})()") { r ->
+            try {
+                if (r != null && r != "null") {
+                    val a = JSONArray(r)
+                    cb(a.optInt(0), a.optInt(1))
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
     /** 播放速度(1 = 正常) */
     fun setSpeed(rate: Float) {
         js("(function(){$FIND_VIDEO if(v)v.playbackRate=$rate;})()")
@@ -265,3 +286,11 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
 private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
     "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
+
+// 拿掉網頁「禁止縮放」的設定(user-scalable=no、maximum-scale=1)
+private const val ALLOW_ZOOM =
+    "(function(){var m=document.querySelector('meta[name=viewport]');if(!m)return;" +
+    "var c=m.getAttribute('content')||'';" +
+    "c=c.replace(/user-scalable\\s*=\\s*(no|0)/i,'user-scalable=yes')" +
+    ".replace(/maximum-scale\\s*=\\s*[0-9.]+/i,'maximum-scale=5');" +
+    "m.setAttribute('content',c);})()"

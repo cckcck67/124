@@ -20,9 +20,12 @@ jobs:
         with:
           gradle-version: '8.7'
       - name: Build debug APK
-        run: gradle assembleDebug
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
+        run: gradle assembleDebug -PbuildNumber=${{ github.run_number }}
+      - name: Rename APK and write version info
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
+          echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"1.${{ github.run_number }}\"}" > version.json
+          cat version.json
       - uses: actions/upload-artifact@v4
         with:
           name: VrWebPlayer-apk
@@ -34,4 +37,6 @@ jobs:
           name: VrWebPlayer (latest build)
           body: "Automatic build from ${{ github.ref_name }} @ ${{ github.sha }}"
           prerelease: true
-          files: VrWebPlayer.apk
+          files: |
+            VrWebPlayer.apk
+            version.json
