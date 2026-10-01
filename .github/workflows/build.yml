@@ -19,6 +19,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Startup test (must pass before publishing)
+        run: gradle testDebugUnitTest -PbuildNumber=${{ github.run_number }}
       - name: Build debug APK
         run: gradle assembleDebug -PbuildNumber=${{ github.run_number }}
       - name: Rename APK and write version info
