@@ -57,11 +57,12 @@ class MainActivity : Activity(), SensorEventListener {
         const val SRC_DPI = 360
 
         // 低頭控制面板(單位:弧度,以水平線為準)
-        const val MENU_OPEN = 0.785f     // 低頭約 45 度打開
-        const val MENU_CLOSE = 0.65f     // 抬頭回到約 37 度內關閉
-        const val MENU_Y_RANGE = 0.40f   // 面板最上緣到最下緣 = 低頭約 23 度
-        // 剛打開時(低頭 MENU_OPEN)游標正好在最上排空位的中間
-        val MENU_Y_START = MENU_OPEN - (VrMenu.START_Y - VrMenu.Y0) / (VrMenu.Y1 - VrMenu.Y0) * MENU_Y_RANGE
+        // 叫出面板的角度(弧度,相對於正前方)
+        const val SIT_OPEN = 0.52f       // 坐姿:低頭約 30 度打開
+        const val SIT_CLOSE = 0.38f      //       回到約 22 度內關閉
+        const val LIE_OPEN = 0.436f      // 躺平:抬頭約 25 度打開
+        const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
+        const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
         const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
@@ -69,9 +70,10 @@ class MainActivity : Activity(), SensorEventListener {
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
         const val DWELL_BAR_MS = 1500L   // 看著進度條同一點多久跳轉
         const val REPEAT_MS = 500L       // 音量鍵持續看著時的重複間隔
+        const val FWD_REPEAT_MS = 800L   // 快進鍵持續看著時的重複間隔
 
         const val TICK_MS = 400L         // 定時檢查網頁捲動 / 影片位置
-        const val PULL_SHOW_PX = 120f    // 網頁在最上面時往下拉多少就叫出網址列
+        const val PULL_SHOW_PX = 120f    // 網頁在最上面時再往下拉多少就叫出網址列
     }
 
     private lateinit var prefs: SharedPreferences
@@ -92,7 +94,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var settingsOpen = false
     private var ticking = false
     private var lastScrollY = 0f
-    private var barSuppressed = false   // 剛輸入網址:先隱藏網址列,等再次拉到最上面才出現
+    private var barShown = true         // 網址列:網頁捲到最上面後再往下拉才出現,往下捲就收起
 
     // 頭部方向
     private val rot = FloatArray(9)
@@ -122,6 +124,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var downX = 0f
     private var downY = 0f
     private var downAt = 0L
+    private var downScrollY = 0f
     private var inputDialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,6 +145,7 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.gapSphere = prefs.getFloat("gapSphere", 0.03f)
         renderer.panelDepth = prefs.getFloat("panelDepth", 0f)
         renderer.mode = prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1)
+        VrMenu.lying = prefs.getBoolean("lying", false)
         menu.mode = renderer.mode
 
         glView = GLSurfaceView(this).apply {
@@ -227,6 +231,9 @@ class MainActivity : Activity(), SensorEventListener {
             addView(row1)
             addView(row2)
             addView(row3)
+            addView(button("完成") { setSettings(false) }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END })
         }
 
         // 網址列與設定面板疊在畫面上,出現/隱藏時網頁大小不變
@@ -286,6 +293,7 @@ class MainActivity : Activity(), SensorEventListener {
         settingsPanel.visibility = if (open) View.VISIBLE else View.GONE
         renderer.vrMode = vrMode || open   // 設定打開時預覽 VR 畫面
         if (open) hideKeyboard()
+        updateTopBar()                     // 設定打開時只顯示滑桿,不顯示網址列
     }
 
     /**
@@ -318,14 +326,14 @@ class MainActivity : Activity(), SensorEventListener {
         urlInput.setText(url)
         presentation?.loadUrl(url)
         hideKeyboard()
-        // 前往新網址後先收起網址列,再次拉到最上面時才出現
-        barSuppressed = true
-        topBar.visibility = View.GONE
+        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現
+        barShown = false
+        updateTopBar()
     }
 
     private fun updateTopBar() {
         if (vrMode) return
-        val show = settingsOpen || urlInput.hasFocus() || (!barSuppressed && lastScrollY <= 4f)
+        val show = !settingsOpen && (urlInput.hasFocus() || barShown)
         topBar.visibility = if (show) View.VISIBLE else View.GONE
     }
 
@@ -392,8 +400,10 @@ class MainActivity : Activity(), SensorEventListener {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
                         lastScrollY = y
-                        if (y > 4f) barSuppressed = false   // 往下捲過,之後回到最上面就會出現
-                        updateTopBar()
+                        if (y > 4f && barShown) {   // 往下捲就收起網址列
+                            barShown = false
+                            updateTopBar()
+                        }
                     }
                 }
                 if (renderer.vrMode && renderer.mode != VrRenderer.MODE_2D) {
@@ -468,9 +478,11 @@ class MainActivity : Activity(), SensorEventListener {
         presentation?.dispatchTouch(e)
         e.recycle()
 
-        // 網頁在最上面時往下拉 → 叫出網址列
-        if (action == MotionEvent.ACTION_MOVE && ev.y - downY > PULL_SHOW_PX && lastScrollY <= 4f) {
-            barSuppressed = false
+        // 網頁已在最上面時再往下拉 → 叫出網址列(不會一捲到頂就擋住網頁)
+        if (action == MotionEvent.ACTION_DOWN) downScrollY = lastScrollY
+        if (action == MotionEvent.ACTION_MOVE && !barShown && downScrollY <= 4f && lastScrollY <= 4f &&
+            ev.y - downY > PULL_SHOW_PX) {
+            barShown = true
             updateTopBar()
         }
 
@@ -606,16 +618,22 @@ class MainActivity : Activity(), SensorEventListener {
         val down = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
         lastAz = az
 
-        // ---- 控制面板:低頭打開,抬頭關閉 ----
-        if (!menuOpen && down > MENU_OPEN) setMenu(true)
-        else if (menuOpen && down < MENU_CLOSE) setMenu(false)
+        // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
+        val lying = VrMenu.lying
+        val tilt = if (lying) -down else down
+        val openAt = if (lying) LIE_OPEN else SIT_OPEN
+        val closeAt = if (lying) LIE_CLOSE else SIT_CLOSE
+        if (!menuOpen && tilt > openAt) setMenu(true)
+        else if (menuOpen && tilt < closeAt) setMenu(false)
         if (!menuOpen) return
 
         var dYaw = az - menuAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
         if (dYaw < -PI) dYaw += (2 * PI).toFloat()
         val tx = (0.5f + dYaw / MENU_YAW_RANGE * (VrMenu.X1 - VrMenu.X0)).coerceIn(VrMenu.X0, VrMenu.X1)
-        val ty = (VrMenu.Y0 + (down - MENU_Y_START) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
+        // 剛打開時游標在空白列;頭再轉多一點,游標往面板外側(坐姿往下、躺平往上)移動
+        val dir = if (lying) -1f else 1f
+        val ty = (VrMenu.START_Y + dir * (tilt - openAt) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
             .coerceIn(VrMenu.Y0, VrMenu.Y1)
         renderer.cursorX += (tx - renderer.cursorX) * SMOOTH
         renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
@@ -673,6 +691,8 @@ class MainActivity : Activity(), SensorEventListener {
             activate(t)
             if (t == VrMenu.BTN_VOL_DOWN || t == VrMenu.BTN_VOL_UP) {
                 hoverStart = now - need + REPEAT_MS   // 繼續看著 = 持續調整
+            } else if (t == VrMenu.BTN_FWD) {
+                hoverStart = now - need + FWD_REPEAT_MS   // 繼續看著 = 一直快進
             } else {
                 dwellDone = true
             }
@@ -690,11 +710,18 @@ class MainActivity : Activity(), SensorEventListener {
                 p.seekTo(menu.hoverFrac)
                 menu.current = menu.hoverFrac * menu.duration
             }
-            VrMenu.BTN_PLAY -> p.togglePlay()
+            // 坐姿 / 躺平切換:同時開始置中倒數,讓正前方跟著新姿勢
+            VrMenu.BTN_POSTURE -> {
+                VrMenu.lying = !VrMenu.lying
+                prefs.edit().putBoolean("lying", VrMenu.lying).apply()
+                startRecenterCountdown()
+                setMenu(false)
+                return
+            }
             VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
-            // 置中:給兩秒抬頭看想要的正前方,再以當時的方向為準
+            // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
             VrMenu.BTN_RECENTER -> startRecenterCountdown()
             // 速度 / 模式:在上方拉出選項(再看一次收起)
             VrMenu.BTN_SPEED, VrMenu.BTN_MODE ->
