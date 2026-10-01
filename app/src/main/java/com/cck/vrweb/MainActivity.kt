@@ -67,10 +67,10 @@ class MainActivity : Activity(), SensorEventListener {
         const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
         const val LIE_OPEN_FLAT = 0.349f // 躺平(2D / 左右3D):抬頭約 20 度打開
         const val LIE_CLOSE_FLAT = 0.24f //       回到約 14 度內關閉
-        const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
+        const val MENU_Y_RANGE = 0.48f   // 面板一端到另一端 = 頭轉約 27 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
-        const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
-        const val CURSOR_TAU = 0.04f     // 游標平滑的時間常數(秒),越大越穩、越慢
+        const val MENU_YAW_RANGE = 1.35f // 面板左端到右端 = 轉頭約 77 度
+        const val CURSOR_TAU = 0.06f     // 游標平滑的時間常數(秒),越大越穩、越慢
         const val RECENTER_DELAY_MS = 3000L  // 按「置中」後倒數 3 秒,給時間抬頭看正前方
         const val ENTER_DELAY_MS = 5000L     // 進入 VR 後倒數 5 秒置中,給時間把手機放進盒子
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
@@ -79,6 +79,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val FWD_REPEAT_MS = 800L   // 快進鍵持續看著時的重複間隔
 
         const val TICK_MS = 400L         // 定時檢查網頁捲動 / 影片位置
+        const val UPDATE_CHECK_MS = 30 * 60 * 1000L
         const val PULL_SHOW_PX = 120f    // 網頁在最上面時再往下拉多少就叫出網址列
     }
 
@@ -173,9 +174,17 @@ class MainActivity : Activity(), SensorEventListener {
         setupGestures()
         hideSystemBars()
 
-        // 開啟幾秒後在背景檢查有沒有新版本(VR 模式中不打擾)
+    }
+
+    /** 背景檢查有沒有新版本(VR 模式中不打擾;回到 App 時最多每 30 分鐘檢查一次) */
+    private var lastUpdateCheck = 0L
+
+    private fun checkUpdateSoon() {
+        val now = SystemClock.uptimeMillis()
+        if (lastUpdateCheck != 0L && now - lastUpdateCheck < UPDATE_CHECK_MS) return
+        lastUpdateCheck = now
         handler.postDelayed({
-            if (!vrMode) Updater(this) { hideSystemBars() }.check()
+            if (!vrMode && !isFinishing) Updater(this) { hideSystemBars() }.check()
         }, 3000)
     }
 
@@ -887,7 +896,6 @@ class MainActivity : Activity(), SensorEventListener {
                 refreshSettingRows()
                 menu.settingsPage = true
             }
-            VrMenu.SET_BACK -> menu.settingsPage = false
             else -> when {
                 target >= VrMenu.SET_MINUS -> {
                     adjustSetting(VrMenu.setIndex(target), if (VrMenu.isSetMinus(target)) -1 else 1)
@@ -990,6 +998,7 @@ class MainActivity : Activity(), SensorEventListener {
         glView.requestRender()
         ticking = true
         handler.post(tick)
+        checkUpdateSoon()
     }
 
     override fun onPause() {
