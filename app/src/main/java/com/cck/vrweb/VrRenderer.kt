@@ -17,14 +17,16 @@ import kotlin.math.tan
 
 /**
  * 把虛擬螢幕(網頁)的畫面當成 OES 材質畫出來。
+ * 「有變化才重畫」:新影片畫面、面板 / 數字更新時呼叫 onDirty,由 GLSurfaceView 排一次重畫。
+ * 4K 畫質時先把 OES 材質複製到一張有 Mipmap 的普通材質,縮小顯示才不會閃爍。
  * - 非 VR:整頁畫一份
  * - VR 平面模式(2D / 左右3D):左右眼各畫一份平面畫面
  * - VR180 / 上下VR 模式:把攤平的球面影片還原成球面,依頭部方向顯示(真正的虛擬實境)
  * VR 模式另外疊一層:游標 + 控制面板。
  */
 class VrRenderer(
-    private val srcW: Int,
-    private val srcH: Int,
+    private var srcW: Int,
+    private var srcH: Int,
     private val onSurfaceReady: (SurfaceTexture) -> Unit
 ) : GLSurfaceView.Renderer {
 
@@ -62,11 +64,21 @@ class VrRenderer(
             }
         """
 
+        // 影片材質的兩種來源:OES(網頁畫面直接用)或普通 2D 材質(4K 時複製出來、有 Mipmap)
+        private const val OES_HEAD = """
+            #extension GL_OES_EGL_image_external : require
+            #define SAMPLER samplerExternalOES
+            #define SAMPLE(p) texture2D(uTex, (uSt * vec4(p, 0.0, 1.0)).xy)
+        """
+        private const val TEX2D_HEAD = """
+            #define SAMPLER sampler2D
+            #define SAMPLE(p) texture2D(uTex, p)
+        """
+
         // 平面影片:鏡片校正 + 取來源的某一塊(uSrc = 縮放 xy、位移 zw)
         private const val FS = """
-            #extension GL_OES_EGL_image_external : require
             precision mediump float;
-            uniform samplerExternalOES uTex;
+            uniform SAMPLER uTex;
             uniform mat4 uSt;
             uniform float uK;
             uniform vec4 uSrc;
@@ -79,20 +91,30 @@ class VrRenderer(
                     return;
                 }
                 uv = uv * uSrc.xy + uSrc.zw;
-                gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
+                gl_FragColor = SAMPLE(uv);
+            }
+        """
+
+        // 把 OES 畫面原樣複製到 2D 材質(4K Mipmap 用)
+        private const val BLIT_FS = """
+            precision mediump float;
+            uniform SAMPLER uTex;
+            uniform mat4 uSt;
+            varying vec2 vUv;
+            void main() {
+                gl_FragColor = SAMPLE(vUv);
             }
         """
 
         // 球面影片:每個像素算出視線方向 → 經緯度 → 影片上的位置
         // uLon = 經度換算比例(180 度影片 = 1/π,360 度影片 = 1/2π)
         private const val FS_180 = """
-            #extension GL_OES_EGL_image_external : require
             #ifdef GL_FRAGMENT_PRECISION_HIGH
             precision highp float;
             #else
             precision mediump float;
             #endif
-            uniform samplerExternalOES uTex;
+            uniform SAMPLER uTex;
             uniform mat4 uSt;
             uniform mat3 uHead;
             uniform vec2 uTan;
@@ -112,7 +134,7 @@ class VrRenderer(
                     return;
                 }
                 uv = uv * uSrc.xy + uSrc.zw;
-                gl_FragColor = texture2D(uTex, (uSt * vec4(uv, 0.0, 1.0)).xy);
+                gl_FragColor = SAMPLE(uv);
             }
         """
 
@@ -177,6 +199,12 @@ class VrRenderer(
     /** 球面模式頭部方向:把「相機座標的視線」轉成「影片座標」的 3x3 矩陣(直行優先) */
     @Volatile var head = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 
+    /** 需要重畫時呼叫(由 MainActivity 設成 glView.requestRender) */
+    @Volatile var onDirty: () -> Unit = {}
+
+    /** 4K 畫質時開啟 Mipmap(手機不支援時自動略過) */
+    @Volatile var useMipmap = false
+
     private var surfaceTexture: SurfaceTexture? = null
     @Volatile private var frameAvailable = false
     private val stMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
@@ -185,17 +213,32 @@ class VrRenderer(
     private var viewW = 1
     private var viewH = 1
 
-    // 平面影片
-    private var program = 0
-    private var aPos = 0; private var aUv = 0
-    private var uSt = 0; private var uTex = 0; private var uK = 0
-    private var uTilt = 0; private var uSrc = 0
+    /** 一組著色器程式與它的參數位置 */
+    private class Prog(val id: Int) {
+        val aPos = GLES20.glGetAttribLocation(id, "aPos")
+        val aUv = GLES20.glGetAttribLocation(id, "aUv")
+        val uSt = GLES20.glGetUniformLocation(id, "uSt")
+        val uTex = GLES20.glGetUniformLocation(id, "uTex")
+        val uK = GLES20.glGetUniformLocation(id, "uK")
+        val uTilt = GLES20.glGetUniformLocation(id, "uTilt")
+        val uSrc = GLES20.glGetUniformLocation(id, "uSrc")
+        val uHead = GLES20.glGetUniformLocation(id, "uHead")
+        val uTan = GLES20.glGetUniformLocation(id, "uTan")
+        val uLon = GLES20.glGetUniformLocation(id, "uLon")
+    }
 
-    // VR180
-    private var program180 = 0
-    private var bPos = 0; private var bUv = 0
-    private var bSt = 0; private var bTex = 0; private var bK = 0
-    private var bHead = 0; private var bTan = 0; private var bSrc = 0; private var bLon = 0
+    // [0] = 直接用 OES 材質,[1] = 用 Mipmap 的 2D 材質
+    private lateinit var flatProg: Array<Prog>
+    private lateinit var sphereProg: Array<Prog>
+    private lateinit var blitProg: Prog
+
+    // Mipmap 用的複製材質
+    private var mipSupported = false
+    private var mipTex = 0
+    private var fbo = 0
+    private var mipW = 0
+    private var mipH = 0
+    private var mipFresh = false   // 複製材質已有目前畫面
 
     // 疊加層(游標 + 控制面板)
     private var overlay = 0
@@ -232,12 +275,22 @@ class VrRenderer(
         return floatArrayOf((w - rw) / 2f, (h - rh) / 2f, rw, rh)
     }
 
+    /** 改變虛擬螢幕解析度(畫質);比例固定 16:9 */
+    fun setBufferSize(w: Int, h: Int) {
+        srcW = w
+        srcH = h
+        surfaceTexture?.setDefaultBufferSize(w, h)
+        mipFresh = false
+        onDirty()
+    }
+
     /** 在主執行緒畫倒數數字;畫完後下一個畫格上傳成材質 */
     fun updateHud(draw: (Bitmap) -> Unit) {
         synchronized(panelLock) {
             draw(hudBitmap)
             hudDirty = true
         }
+        onDirty()
     }
 
     /** 在主執行緒畫面板;畫完後下一個畫格上傳成材質 */
@@ -246,28 +299,24 @@ class VrRenderer(
             draw(panelBitmap)
             panelDirty = true
         }
+        onDirty()
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        program = buildProgram(VIDEO_VS, FS)
-        aPos = GLES20.glGetAttribLocation(program, "aPos")
-        aUv = GLES20.glGetAttribLocation(program, "aUv")
-        uSt = GLES20.glGetUniformLocation(program, "uSt")
-        uTex = GLES20.glGetUniformLocation(program, "uTex")
-        uK = GLES20.glGetUniformLocation(program, "uK")
-        uTilt = GLES20.glGetUniformLocation(program, "uTilt")
-        uSrc = GLES20.glGetUniformLocation(program, "uSrc")
+        flatProg = arrayOf(Prog(buildProgram(VIDEO_VS, OES_HEAD + FS)), Prog(buildProgram(VIDEO_VS, TEX2D_HEAD + FS)))
+        sphereProg = arrayOf(Prog(buildProgram(VS, OES_HEAD + FS_180)), Prog(buildProgram(VS, TEX2D_HEAD + FS_180)))
+        blitProg = Prog(buildProgram(VS, OES_HEAD + BLIT_FS))
 
-        program180 = buildProgram(VS, FS_180)
-        bPos = GLES20.glGetAttribLocation(program180, "aPos")
-        bUv = GLES20.glGetAttribLocation(program180, "aUv")
-        bSt = GLES20.glGetUniformLocation(program180, "uSt")
-        bTex = GLES20.glGetUniformLocation(program180, "uTex")
-        bK = GLES20.glGetUniformLocation(program180, "uK")
-        bHead = GLES20.glGetUniformLocation(program180, "uHead")
-        bTan = GLES20.glGetUniformLocation(program180, "uTan")
-        bSrc = GLES20.glGetUniformLocation(program180, "uSrc")
-        bLon = GLES20.glGetUniformLocation(program180, "uLon")
+        // 2D 材質的 Mipmap 需要非 2 次方尺寸支援(OpenGL ES 3 以上或對應擴充)
+        val ver = GLES20.glGetString(GLES20.GL_VERSION) ?: ""
+        val ext = GLES20.glGetString(GLES20.GL_EXTENSIONS) ?: ""
+        val maxTex = IntArray(1).also { GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, it, 0) }[0]
+        mipSupported = (ver.contains("OpenGL ES 3") || ext.contains("GL_OES_texture_npot")) && maxTex >= 3840
+        mipTex = 0
+        fbo = 0
+        mipW = 0
+        mipH = 0
+        mipFresh = false
 
         overlay = buildProgram(VS, OVERLAY_FS)
         oPos = GLES20.glGetAttribLocation(overlay, "aPos")
@@ -312,7 +361,7 @@ class VrRenderer(
 
         val st = SurfaceTexture(texId).apply {
             setDefaultBufferSize(srcW, srcH)
-            setOnFrameAvailableListener { frameAvailable = true }
+            setOnFrameAvailableListener { frameAvailable = true; onDirty() }
         }
         surfaceTexture = st
         onSurfaceReady(st)
@@ -323,12 +372,80 @@ class VrRenderer(
         viewH = height
     }
 
+    /** 4K 時把目前網頁畫面複製到 2D 材質並產生 Mipmap */
+    private fun updateMipmap(newFrame: Boolean): Boolean {
+        if (!useMipmap || !mipSupported) return false
+        if (mipTex == 0 || mipW != srcW || mipH != srcH) {
+            val ids = IntArray(1)
+            if (mipTex == 0) { GLES20.glGenTextures(1, ids, 0); mipTex = ids[0] }
+            if (fbo == 0) { GLES20.glGenFramebuffers(1, ids, 0); fbo = ids[0] }
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mipTex)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, srcW, srcH, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, mipTex, 0)
+            val ok = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            if (!ok) { mipSupported = false; return false }
+            mipW = srcW
+            mipH = srcH
+            mipFresh = false
+        }
+        if (newFrame || !mipFresh) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
+            GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+            GLES20.glDisable(GLES20.GL_BLEND)
+            GLES20.glViewport(0, 0, srcW, srcH)
+            val p = blitProg
+            GLES20.glUseProgram(p.id)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+            GLES20.glUniform1i(p.uTex, 0)
+            GLES20.glUniformMatrix4fv(p.uSt, 1, false, stMatrix, 0)
+            bindQuad(p.aPos, p.aUv)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mipTex)
+            GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            mipFresh = true
+        }
+        return true
+    }
+
+    /** 這一格是否用 Mipmap 的 2D 材質(否則直接用 OES) */
+    private var useMip = false
+
+    private fun bindVideoTexture(p: Prog) {
+        if (useMip) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mipTex)
+            GLES20.glUniform1i(p.uTex, 3)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        } else {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+            GLES20.glUniform1i(p.uTex, 0)
+            GLES20.glUniformMatrix4fv(p.uSt, 1, false, stMatrix, 0)
+        }
+    }
+
     override fun onDrawFrame(gl: GL10?) {
-        if (frameAvailable) {
+        val newFrame = frameAvailable
+        if (newFrame) {
             frameAvailable = false
             surfaceTexture?.updateTexImage()
             surfaceTexture?.getTransformMatrix(stMatrix)
         }
+        useMip = updateMipmap(newFrame)
 
         GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
         GLES20.glViewport(0, 0, viewW, viewH)
@@ -417,33 +534,29 @@ class VrRenderer(
     }
 
     private fun drawVideo(k: Float, tiltRad: Float, sx: Float, sy: Float, ox: Float, oy: Float) {
+        val p = flatProg[if (useMip) 1 else 0]
         GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glUseProgram(program)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
-        GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uSt, 1, false, stMatrix, 0)
-        GLES20.glUniform1f(uK, k)
-        GLES20.glUniform1f(uTilt, tiltRad)
-        GLES20.glUniform4f(uSrc, sx, sy, ox, oy)
-        bindQuad(aPos, aUv)
+        GLES20.glUseProgram(p.id)
+        bindVideoTexture(p)
+        GLES20.glUniform1f(p.uK, k)
+        GLES20.glUniform1f(p.uTilt, tiltRad)
+        GLES20.glUniform4f(p.uSrc, sx, sy, ox, oy)
+        bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
     private fun drawSphere(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float, lonScale: Float) {
+        val p = sphereProg[if (useMip) 1 else 0]
         GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glUseProgram(program180)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
-        GLES20.glUniform1i(bTex, 0)
-        GLES20.glUniformMatrix4fv(bSt, 1, false, stMatrix, 0)
-        GLES20.glUniform1f(bK, distortion)
-        GLES20.glUniformMatrix3fv(bHead, 1, false, head, 0)
+        GLES20.glUseProgram(p.id)
+        bindVideoTexture(p)
+        GLES20.glUniform1f(p.uK, distortion)
+        GLES20.glUniformMatrix3fv(p.uHead, 1, false, head, 0)
         val tx = tan(Math.toRadians(fovDeg / 2.0)).toFloat()
-        GLES20.glUniform2f(bTan, tx, tx / aspect)
-        GLES20.glUniform4f(bSrc, sx, sy, ox, oy)
-        GLES20.glUniform1f(bLon, lonScale)
-        bindQuad(bPos, bUv)
+        GLES20.glUniform2f(p.uTan, tx, tx / aspect)
+        GLES20.glUniform4f(p.uSrc, sx, sy, ox, oy)
+        GLES20.glUniform1f(p.uLon, lonScale)
+        bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 

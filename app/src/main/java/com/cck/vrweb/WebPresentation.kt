@@ -26,7 +26,12 @@ import org.json.JSONObject
  * 顯示在「看不見的虛擬螢幕」上的瀏覽器。
  * 它的畫面會被 VrRenderer 當成材質畫出來;觸控由 MainActivity 轉送進來。
  */
-class WebPresentation(outer: Context, display: Display) : Presentation(outer, display) {
+class WebPresentation(
+    outer: Context, display: Display,
+    private val screenW: Int, private val screenH: Int   // 虛擬螢幕像素大小(依畫質)
+) : Presentation(outer, display) {
+
+    private var resumeSec = -1.0   // 重新載入後要跳回的播放位置(切換畫質用)
 
     private lateinit var root: FrameLayout
     lateinit var webView: WebView
@@ -66,6 +71,14 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
             override fun onPageFinished(view: WebView, url: String?) {
                 // 有些網站禁止縮放,把限制拿掉,讓雙指可以放大縮小
                 view.evaluateJavascript(ALLOW_ZOOM, null)
+                // 切換畫質後重新載入:等影片出現,跳回原本的位置繼續播
+                if (resumeSec >= 0) {
+                    view.evaluateJavascript("(function(t){var n=0,h=setInterval(function(){n++;" +
+                        "var v=document.querySelector('video');" +
+                        "if(v&&v.readyState>0){if(t>1)v.currentTime=t;if(v.play)v.play();clearInterval(h);}" +
+                        "else if(n>40)clearInterval(h);},500);})($resumeSec)", null)
+                    resumeSec = -1.0
+                }
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
@@ -94,6 +107,12 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         customView?.let { root.removeView(it) }
         customView = null
         customCallback = null
+    }
+
+    /** 載入網址,載入完成後跳到指定秒數繼續播放 */
+    fun loadUrl(url: String, resumeAt: Double) {
+        resumeSec = resumeAt
+        loadUrl(url)
     }
 
     fun loadUrl(url: String) {
@@ -172,7 +191,7 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
     fun seekBy(sec: Int) {
         js("(function(){$FIND_VIDEO if(!v)return false;" +
                 "v.currentTime=Math.max(0,v.currentTime+($sec));return true;})()") { r ->
-            if (r != "true") tap(MainActivity.SRC_W * (if (sec < 0) 0.2f else 0.8f), MainActivity.SRC_H * 0.5f, 2)
+            if (r != "true") tap(screenW * (if (sec < 0) 0.2f else 0.8f), screenH * 0.5f, 2)
         }
     }
 
@@ -185,7 +204,7 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
     fun togglePlay() {
         js("(function(){$FIND_VIDEO if(!v)return false;" +
                 "if(v.paused)v.play();else v.pause();return true;})()") { r ->
-            if (r != "true") tap(MainActivity.SRC_W * 0.5f, MainActivity.SRC_H * 0.5f, 1)
+            if (r != "true") tap(screenW * 0.5f, screenH * 0.5f, 1)
         }
     }
 

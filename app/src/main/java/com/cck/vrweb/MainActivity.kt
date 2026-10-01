@@ -19,6 +19,7 @@ import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
@@ -49,10 +50,14 @@ import kotlin.math.sin
 class MainActivity : Activity(), SensorEventListener {
 
     companion object {
-        // 網頁所在虛擬螢幕的解析度(16:9)。DPI 360 = 2.25 倍縮放,排版和 1280x720@240 相同但更清楚
-        const val SRC_W = 1920
-        const val SRC_H = 1080
-        const val SRC_DPI = 360
+        // 網頁所在虛擬螢幕的畫質(16:9)。DPI 跟著解析度等比例調整,網頁排版都和 1280x720@240 相同
+        val QUALITY_W = intArrayOf(1920, 2560, 3840)
+        val QUALITY_H = intArrayOf(1080, 1440, 2160)
+        val QUALITY_DPI = intArrayOf(360, 480, 720)
+        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
+        const val QUALITY_4K = 2
+
+        const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
         // 低頭控制面板(單位:弧度,以水平線為準)
         // 叫出面板的角度(弧度,相對於正前方)
@@ -65,7 +70,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
-        const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
+        const val CURSOR_TAU = 0.04f     // 游標平滑的時間常數(秒),越大越穩、越慢
         const val RECENTER_DELAY_MS = 3000L  // 按「置中」後倒數 3 秒,給時間抬頭看正前方
         const val ENTER_DELAY_MS = 5000L     // 進入 VR 後倒數 5 秒置中,給時間把手機放進盒子
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
@@ -90,23 +95,36 @@ class MainActivity : Activity(), SensorEventListener {
 
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: WebPresentation? = null
-    private var vrMode = false
+    private var displaySurface: Surface? = null
+    private var quality = 1                 // QUALITY_* 的索引,預設 1440p
+    private var srcW = QUALITY_W[1]
+    private var srcH = QUALITY_H[1]
+    @Volatile private var vrMode = false
+
+    // 頭部感應器在背景執行緒處理,算好的結果交給主執行緒更新面板
+    private var sensorThread: HandlerThread? = null
+    @Volatile private var sensorAz = 0f
+    @Volatile private var sensorDown = 0f
+    @Volatile private var menuStepPosted = false
+    private var lastCursorAt = 0L
+    private val headBuf = arrayOf(FloatArray(9), FloatArray(9))   // 兩份輪流用,避免每次產生新陣列
+    private var headIdx = 0
     private var ticking = false
     private var lastScrollY = 0f
     private var barShown = true         // 網址列:網頁捲到最上面後再往下拉才出現,往下捲就收起
 
     // 頭部方向
     private val rot = FloatArray(9)
-    private var reverseLandscape = false
+    @Volatile private var reverseLandscape = false
     // 參考方向(右、上、前):VR180 的影片方向,以及判斷「低頭」的基準。
     // 進入 VR 時 = 水平面、目前面向;置中後 = 當時頭的完整方向(可躺著看)
     private val refR = FloatArray(3)
     private val refU = FloatArray(3)
     private val refF = FloatArray(3)
-    private var needLevelRef = true
-    private var recenter = false
-    private var recenterAt = 0L
-    private var lastAz = 0f
+    @Volatile private var needLevelRef = true
+    @Volatile private var recenter = false
+    @Volatile private var recenterAt = 0L
+    @Volatile private var lastAz = 0f
 
     // 控制面板
     private val menu = VrMenu()
@@ -133,7 +151,11 @@ class MainActivity : Activity(), SensorEventListener {
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
 
-        renderer = VrRenderer(SRC_W, SRC_H) { st -> handler.post { attachSurface(st) } }
+        quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
+        srcW = QUALITY_W[quality]
+        srcH = QUALITY_H[quality]
+        renderer = VrRenderer(srcW, srcH) { st -> handler.post { attachSurface(st) } }
+        renderer.useMipmap = quality == QUALITY_4K
         renderer.distortion = prefs.getFloat("k", 0.15f)
         VrMenu.lying = prefs.getBoolean("lying", false)
         setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
@@ -142,8 +164,10 @@ class MainActivity : Activity(), SensorEventListener {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
             setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            // 有變化才重畫:新影片畫面、轉頭(球面模式)、面板更新時才排重畫,靜止時不耗電
+            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }
+        renderer.onDirty = { glView.requestRender() }
 
         buildUi()
         setupGestures()
@@ -241,6 +265,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
         for (st in modeSettings(m)) st.apply(settingValue(m, st))
+        glView.requestRender()
     }
 
     /** 設定頁第 i 項 + / −(最後一項是播放速度) */
@@ -252,16 +277,21 @@ class MainActivity : Activity(), SensorEventListener {
             presentation?.setSpeed(speeds[speedIndex])
             return
         }
+        if (i == list.size + 1) {   // 畫質(所有模式共用)
+            setQuality((quality + dir).coerceIn(0, QUALITY_NAMES.size - 1))
+            return
+        }
         val st = list.getOrNull(i) ?: return
         val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
         prefs.edit().putFloat("m${m}_${st.key}", v).apply()
         st.apply(v)
+        glView.requestRender()
     }
 
     private fun refreshSettingRows() {
         val m = renderer.mode
         menu.settingRows = modeSettings(m).map { it.name to it.format.format(settingValue(m, it)) } +
-                ("速度" to "${speeds[speedIndex]}x")
+                ("速度" to "${speeds[speedIndex]}x") + ("畫質" to QUALITY_NAMES[quality])
     }
 
     /**
@@ -422,19 +452,46 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun attachSurface(st: SurfaceTexture) {
         val surface = Surface(st)
+        displaySurface = surface
         virtualDisplay?.let { it.surface = surface; return }
+        createDisplay(prefs.getString("url", "https://m.youtube.com")!!, -1.0)
+    }
 
+    /** 建立虛擬螢幕與上面的網頁(私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限) */
+    private fun createDisplay(url: String, resumeAt: Double) {
+        val surface = displaySurface ?: return
         val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        // 私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限
         val vd = dm.createVirtualDisplay(
-            "vr-web", SRC_W, SRC_H, SRC_DPI, surface,
+            "vr-web", srcW, srcH, QUALITY_DPI[quality], surface,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         )
         virtualDisplay = vd
-        presentation = WebPresentation(this, vd.display).also {
+        presentation = WebPresentation(this, vd.display, srcW, srcH).also {
             it.show()
-            it.loadUrl(prefs.getString("url", "https://m.youtube.com")!!)
+            it.loadUrl(url, resumeAt)
         }
+    }
+
+    /**
+     * 切換畫質:Android 的網頁視窗不支援直接改解析度,
+     * 所以重建虛擬螢幕並重新載入目前網頁,載入後跳回原本的播放位置。
+     */
+    private fun setQuality(q: Int) {
+        if (q == quality) return
+        quality = q
+        prefs.edit().putInt("quality", q).apply()
+        srcW = QUALITY_W[q]
+        srcH = QUALITY_H[q]
+        val url = presentation?.currentUrl ?: prefs.getString("url", "https://m.youtube.com")!!
+        val at = if (menu.hasVideo) menu.current else -1.0
+        presentation?.release()
+        presentation?.dismiss()
+        virtualDisplay?.release()
+        presentation = null
+        virtualDisplay = null
+        renderer.setBufferSize(srcW, srcH)
+        renderer.useMipmap = q == QUALITY_4K
+        createDisplay(url, at)
     }
 
     // ---------------- 定時檢查 ----------------
@@ -464,6 +521,7 @@ class MainActivity : Activity(), SensorEventListener {
                             val h = r[3].coerceIn(0.05f, 1f - y)
                             floatArrayOf(x, 1f - y - h, w, h)   // 轉成 y 向上
                         }
+                        glView.requestRender()
                     }
                 }
             }
@@ -489,6 +547,7 @@ class MainActivity : Activity(), SensorEventListener {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
         }
+        glView.requestRender()
     }
 
     /**
@@ -539,8 +598,8 @@ class MainActivity : Activity(), SensorEventListener {
         val coords = Array(n) { i ->
             MotionEvent.PointerCoords().also { c ->
                 ev.getPointerCoords(i, c)
-                c.x = (c.x - r[0]) / r[2] * SRC_W
-                c.y = (c.y - r[1]) / r[3] * SRC_H
+                c.x = (c.x - r[0]) / r[2] * srcW
+                c.y = (c.y - r[1]) / r[3] * srcH
             }
         }
         val x = coords[0].x
@@ -642,6 +701,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 頭部追蹤 ----------------
 
+    /** 背景執行緒(VR-Sensor):算頭部方向,球面模式直接更新渲染用的矩陣 */
     override fun onSensorChanged(event: SensorEvent) {
         if (!vrMode) return
         val r = rot
@@ -655,8 +715,6 @@ class MainActivity : Activity(), SensorEventListener {
         val r0 = s * yw0; val r1 = s * yw1; val r2 = s * yw2
         val u0 = -s * xw0; val u1 = -s * xw1; val u2 = -s * xw2
 
-        val now = SystemClock.uptimeMillis()
-
         if (needLevelRef) {
             // 水平面上、目前面向的方向當正前方
             val yaw = atan2(f0, f1)
@@ -666,7 +724,8 @@ class MainActivity : Activity(), SensorEventListener {
             refF[0] = sy; refF[1] = cy; refF[2] = 0f
             needLevelRef = false
         }
-        if (recenter || (recenterAt > 0 && now >= recenterAt)) {
+        val at = recenterAt
+        if (recenter || (at > 0 && SystemClock.uptimeMillis() >= at)) {
             // 目前頭的完整方向當正前方(躺著看天花板也可以)
             refR[0] = r0; refR[1] = r1; refR[2] = r2
             refU[0] = u0; refU[1] = u1; refU[2] = u2
@@ -674,20 +733,35 @@ class MainActivity : Activity(), SensorEventListener {
             recenter = false
             recenterAt = 0L
             renderer.showHud = false
+            glView.requestRender()
         }
 
         if (VrRenderer.isSphere(renderer.mode)) {
-            // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先
-            renderer.head = floatArrayOf(
-                dot(refR, r0, r1, r2), dot(refU, r0, r1, r2), dot(refF, r0, r1, r2),
-                dot(refR, u0, u1, u2), dot(refU, u0, u1, u2), dot(refF, u0, u1, u2),
-                dot(refR, f0, f1, f2), dot(refU, f0, f1, f2), dot(refF, f0, f1, f2)
-            )
+            // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先;兩份陣列輪流寫,不產生新物件
+            headIdx = 1 - headIdx
+            val h = headBuf[headIdx]
+            h[0] = dot(refR, r0, r1, r2); h[1] = dot(refU, r0, r1, r2); h[2] = dot(refF, r0, r1, r2)
+            h[3] = dot(refR, u0, u1, u2); h[4] = dot(refU, u0, u1, u2); h[5] = dot(refF, u0, u1, u2)
+            h[6] = dot(refR, f0, f1, f2); h[7] = dot(refU, f0, f1, f2); h[8] = dot(refF, f0, f1, f2)
+            renderer.head = h
+            glView.requestRender()   // 球面模式畫面跟著頭轉
         }
 
-        // 視線在參考座標中的左右角度與低頭角度
-        val az = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
-        val down = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        // 視線在參考座標中的左右角度與低頭角度,交給主執行緒處理面板
+        sensorAz = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
+        sensorDown = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        if (!menuStepPosted) {
+            menuStepPosted = true
+            handler.post(menuStep)
+        }
+    }
+
+    /** 主執行緒:依最新的頭部角度開關面板、移動紅點、處理注視 */
+    private val menuStep = Runnable {
+        menuStepPosted = false
+        if (!vrMode) return@Runnable
+        val az = sensorAz
+        val down = sensorDown
         lastAz = az
 
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
@@ -698,7 +772,7 @@ class MainActivity : Activity(), SensorEventListener {
         val closeAt = if (!lying) SIT_CLOSE else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
         if (!menuOpen && tilt > openAt) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
-        if (!menuOpen) return
+        if (!menuOpen) return@Runnable
 
         var dYaw = az - menuAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
@@ -708,9 +782,15 @@ class MainActivity : Activity(), SensorEventListener {
         val dir = if (lying) -1f else 1f
         val ty = (VrMenu.START_Y + dir * (tilt - openAt) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
             .coerceIn(VrMenu.Y0, VrMenu.Y1)
-        renderer.cursorX += (tx - renderer.cursorX) * SMOOTH
-        renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
-        updateMenu(SystemClock.uptimeMillis())
+        // 依經過時間平滑,不受感應器頻率影響
+        val now = SystemClock.uptimeMillis()
+        val dt = ((now - lastCursorAt).coerceIn(1L, 100L)) / 1000f
+        lastCursorAt = now
+        val k = 1f - kotlin.math.exp(-dt / CURSOR_TAU)
+        renderer.cursorX += (tx - renderer.cursorX) * k
+        renderer.cursorY += (ty - renderer.cursorY) * k
+        updateMenu(now)
+        glView.requestRender()
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
@@ -731,6 +811,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.settingsPage = false
         menu.dwell = 0f
         dwellDone = false
+        glView.requestRender()
         if (open) {
             menu.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
             menu.volumeMax = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -902,7 +983,11 @@ class MainActivity : Activity(), SensorEventListener {
         glView.onResume()
         val s = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        s?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
+        // 感應器在背景執行緒接收,不佔用主執行緒(網頁與面板)
+        val t = HandlerThread("VR-Sensor").also { it.start() }
+        sensorThread = t
+        s?.let { sensorManager.registerListener(this, it, SENSOR_PERIOD_US, Handler(t.looper)) }
+        glView.requestRender()
         ticking = true
         handler.post(tick)
     }
@@ -910,6 +995,8 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onPause() {
         presentation?.currentUrl?.let { prefs.edit().putString("url", it).apply() }
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
         ticking = false
         handler.removeCallbacks(tick)
         glView.onPause()
