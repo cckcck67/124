@@ -1,0 +1,42 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build debug APK
+        run: gradle assembleDebug -PbuildNumber=${{ github.run_number }}
+      - name: Rename APK and write version info
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
+          echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"1.${{ github.run_number }}\"}" > version.json
+          cat version.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VrWebPlayer-apk
+          path: VrWebPlayer.apk
+      - name: Publish to Releases (latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: VrWebPlayer (latest build)
+          body: "Automatic build from ${{ github.ref_name }} @ ${{ github.sha }}"
+          prerelease: true
+          files: |
+            VrWebPlayer.apk
+            version.json
