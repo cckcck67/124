@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.widget.Toast
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -25,7 +26,13 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
     companion object {
         private const val BASE = "https://github.com/cckcck67/124/releases/download/latest/"
         private const val VERSION_URL = BASE + "version.json"
-        private const val APK_URL = BASE + "VrWebPlayer.apk"
+        const val APK_URL = BASE + "VrWebPlayer.apk"
+
+        /** 用手機的瀏覽器下載 APK(小米等手機擋下 App 內安裝時的備用方式) */
+        fun openInBrowser(context: Context) {
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try { context.startActivity(i) } catch (e: Exception) {}
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -56,6 +63,7 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
             .setTitle("有新版本")
             .setMessage("新版本 $name 已經可以下載,要現在更新嗎?\n(書籤和設定會保留)")
             .setPositiveButton("更新") { _, _ -> startUpdate() }
+            .setNeutralButton("用瀏覽器下載") { _, _ -> openInBrowser(activity) }
             .setNegativeButton("以後再說", null)
             .setOnDismissListener { onDialogClosed() }
             .show()
@@ -159,15 +167,27 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
     }
 }
 
-/** 接收安裝結果:需要使用者確認時,打開系統的安裝確認畫面 */
+/**
+ * 接收安裝結果:需要使用者確認時打開系統的安裝確認畫面;
+ * 安裝失敗(例如小米手機擋下)就顯示原因,並改用瀏覽器下載新版。
+ */
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            @Suppress("DEPRECATION")
-            val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-            confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(confirm)
+        when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                @Suppress("DEPRECATION")
+                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
+                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(confirm)
+            }
+            PackageInstaller.STATUS_SUCCESS -> {}
+            PackageInstaller.STATUS_FAILURE_ABORTED -> {}   // 使用者自己按取消
+            else -> {
+                val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "代碼 $status"
+                Toast.makeText(context, "App 內安裝失敗($msg),改用瀏覽器下載新版", Toast.LENGTH_LONG).show()
+                Updater.openInBrowser(context)
+            }
         }
     }
 }
