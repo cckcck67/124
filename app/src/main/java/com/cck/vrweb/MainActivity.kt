@@ -58,8 +58,8 @@ class MainActivity : Activity(), SensorEventListener {
 
         // 低頭控制面板(單位:弧度,以水平線為準)
         // 叫出面板的角度(弧度,相對於正前方)
-        const val SIT_OPEN = 0.52f       // 坐姿:低頭約 30 度打開
-        const val SIT_CLOSE = 0.38f      //       回到約 22 度內關閉
+        const val SIT_OPEN = 0.873f      // 坐姿:低頭約 50 度打開
+        const val SIT_CLOSE = 0.70f      //       回到約 40 度內關閉
         const val LIE_OPEN = 0.436f      // 躺平:抬頭約 25 度打開
         const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
         const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
@@ -184,6 +184,7 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundColor(bg)
             addView(button("←") { presentation?.handleBack() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(button("★") { showBookmarks() })
             addView(button("設定") { setSettings(!settingsOpen) })
             addView(button("前往") { go() })
             addView(button("VR") { setVr(true) })
@@ -335,6 +336,86 @@ class MainActivity : Activity(), SensorEventListener {
         if (vrMode) return
         val show = !settingsOpen && (urlInput.hasFocus() || barShown)
         topBar.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    // ---------------- 書籤 ----------------
+
+    private class Bookmark(var title: String, var url: String)
+
+    private fun loadBookmarks(): MutableList<Bookmark> {
+        val list = mutableListOf<Bookmark>()
+        try {
+            val a = org.json.JSONArray(prefs.getString("bookmarks", "[]"))
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                list.add(Bookmark(o.optString("t"), o.optString("u")))
+            }
+        } catch (e: Exception) {}
+        return list
+    }
+
+    private fun saveBookmarks(list: List<Bookmark>) {
+        val a = org.json.JSONArray()
+        for (b in list) a.put(org.json.JSONObject().put("t", b.title).put("u", b.url))
+        prefs.edit().putString("bookmarks", a.toString()).apply()
+    }
+
+    /** 書籤清單:點一下開啟,長按編輯 / 刪除 */
+    private fun showBookmarks() {
+        hideKeyboard()
+        val list = loadBookmarks()
+        val names = list.map { it.title.ifBlank { it.url } }.toTypedArray()
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(if (list.isEmpty()) "書籤(還沒有書籤)" else "書籤(長按可編輯)")
+            .setItems(names) { _, i -> openUrl(list[i].url) }
+            .setPositiveButton("加入目前網頁") { _, _ ->
+                val url = presentation?.currentUrl ?: urlInput.text.toString()
+                if (url.isNotBlank()) editBookmark(list, -1, Bookmark(presentation?.currentTitle ?: "", url))
+            }
+            .setNegativeButton("關閉", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.listView?.setOnItemLongClickListener { _, _, i, _ ->
+                dlg.dismiss()
+                editBookmark(list, i, list[i])
+                true
+            }
+        }
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
+
+    /** 新增(index = -1)或編輯書籤的名稱與網址 */
+    private fun editBookmark(list: MutableList<Bookmark>, index: Int, b: Bookmark) {
+        val title = EditText(this).apply { setSingleLine(); hint = "名稱"; setText(b.title) }
+        val url = EditText(this).apply {
+            setSingleLine(); hint = "網址"; setText(b.url)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 0)
+            addView(title)
+            addView(url)
+        }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(if (index < 0) "加入書籤" else "編輯書籤")
+            .setView(box)
+            .setPositiveButton("儲存") { _, _ ->
+                val u = url.text.toString().trim()
+                if (u.isEmpty()) return@setPositiveButton
+                val nb = Bookmark(title.text.toString().trim(), u)
+                if (index < 0) list.add(nb) else list[index] = nb
+                saveBookmarks(list)
+            }
+            .setNegativeButton("取消", null)
+        if (index >= 0) builder.setNeutralButton("刪除") { _, _ ->
+            list.removeAt(index)
+            saveBookmarks(list)
+        }
+        val dlg = builder.create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
     }
 
     private fun showKeyboard() {

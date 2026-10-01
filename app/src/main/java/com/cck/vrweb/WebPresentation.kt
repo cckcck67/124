@@ -91,6 +91,9 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         if (::webView.isInitialized) webView.loadUrl(url) else pendingUrl = url
     }
 
+    val currentTitle: String?
+        get() = if (::webView.isInitialized) webView.title else null
+
     val currentUrl: String?
         get() = if (::webView.isInitialized) webView.url else null
 

@@ -52,7 +52,7 @@ class VrMenu {
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "速度", "模式", "置中")
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180")
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR")
         val SPEEDS = floatArrayOf(0.5f, 1f, 1.5f)
         private val SPEED_NAMES = arrayOf("0.5x", "1x", "1.5x")
 
