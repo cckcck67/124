@@ -159,7 +159,6 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.useMipmap = quality == QUALITY_4K
         renderer.distortion = prefs.getFloat("k", 0.15f)
         VrMenu.lying = prefs.getBoolean("lying", false)
-        setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
 
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
@@ -168,12 +167,18 @@ class MainActivity : Activity(), SensorEventListener {
             // 有變化才重畫:新影片畫面、轉頭(球面模式)、面板更新時才排重畫,靜止時不耗電
             renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }
-        renderer.onDirty = { glView.requestRender() }
+        renderer.onDirty = { redraw() }
+        setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
 
         buildUi()
         setupGestures()
         hideSystemBars()
 
+    }
+
+    /** 排一次重畫(畫面元件建立前呼叫會略過;任何執行緒都可以呼叫) */
+    private fun redraw() {
+        if (::glView.isInitialized) glView.requestRender()
     }
 
     /** 背景檢查有沒有新版本(VR 模式中不打擾;回到 App 時最多每 30 分鐘檢查一次) */
@@ -274,7 +279,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
         for (st in modeSettings(m)) st.apply(settingValue(m, st))
-        glView.requestRender()
+        redraw()
     }
 
     /** 設定頁第 i 項 + / −(最後一項是播放速度) */
@@ -294,7 +299,7 @@ class MainActivity : Activity(), SensorEventListener {
         val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
         prefs.edit().putFloat("m${m}_${st.key}", v).apply()
         st.apply(v)
-        glView.requestRender()
+        redraw()
     }
 
     private fun refreshSettingRows() {
@@ -530,7 +535,7 @@ class MainActivity : Activity(), SensorEventListener {
                             val h = r[3].coerceIn(0.05f, 1f - y)
                             floatArrayOf(x, 1f - y - h, w, h)   // 轉成 y 向上
                         }
-                        glView.requestRender()
+                        redraw()
                     }
                 }
             }
@@ -556,7 +561,7 @@ class MainActivity : Activity(), SensorEventListener {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
         }
-        glView.requestRender()
+        redraw()
     }
 
     /**
@@ -742,7 +747,7 @@ class MainActivity : Activity(), SensorEventListener {
             recenter = false
             recenterAt = 0L
             renderer.showHud = false
-            glView.requestRender()
+            redraw()
         }
 
         if (VrRenderer.isSphere(renderer.mode)) {
@@ -753,7 +758,7 @@ class MainActivity : Activity(), SensorEventListener {
             h[3] = dot(refR, u0, u1, u2); h[4] = dot(refU, u0, u1, u2); h[5] = dot(refF, u0, u1, u2)
             h[6] = dot(refR, f0, f1, f2); h[7] = dot(refU, f0, f1, f2); h[8] = dot(refF, f0, f1, f2)
             renderer.head = h
-            glView.requestRender()   // 球面模式畫面跟著頭轉
+            redraw()   // 球面模式畫面跟著頭轉
         }
 
         // 視線在參考座標中的左右角度與低頭角度,交給主執行緒處理面板
@@ -799,7 +804,7 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorX += (tx - renderer.cursorX) * k
         renderer.cursorY += (ty - renderer.cursorY) * k
         updateMenu(now)
-        glView.requestRender()
+        redraw()
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
@@ -820,7 +825,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.settingsPage = false
         menu.dwell = 0f
         dwellDone = false
-        glView.requestRender()
+        redraw()
         if (open) {
             menu.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
             menu.volumeMax = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -995,7 +1000,7 @@ class MainActivity : Activity(), SensorEventListener {
         val t = HandlerThread("VR-Sensor").also { it.start() }
         sensorThread = t
         s?.let { sensorManager.registerListener(this, it, SENSOR_PERIOD_US, Handler(t.looper)) }
-        glView.requestRender()
+        redraw()
         ticking = true
         handler.post(tick)
         checkUpdateSoon()
