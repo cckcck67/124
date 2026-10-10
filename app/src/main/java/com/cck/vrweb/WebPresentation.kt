@@ -208,6 +208,41 @@ class WebPresentation(
         }
     }
 
+    /**
+     * 測試用「原始畫面」:YouTube 的 360 / VR180 播放器會自己把影片轉成跟著手機轉的單眼畫面,
+     * 這裡在最上層直接畫出 <video> 的原始畫面,並在左上角顯示 YouTube 標註的投影格式。
+     * 重複呼叫不會重複建立;on = false 移除。
+     */
+    fun showRaw(on: Boolean) {
+        js("(function(on){$FIND_VIDEO_FN var c=document.getElementById('__vrraw');" +
+            "if(!on){if(window.__vrRawStop)window.__vrRawStop();return;}if(c)return;" +
+            "c=document.createElement('canvas');c.id='__vrraw';" +
+            "c.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:2147483647;background:#000;pointer-events:none';" +
+            "document.documentElement.appendChild(c);var run=true,lines=[],last=0;" +
+            "window.__vrRawStop=function(){run=false;c.remove();window.__vrRawStop=null;};" +
+            "function info(v){var s=['video '+v.videoWidth+'x'+v.videoHeight];try{" +
+            "var mp=document.getElementById('movie_player');if(mp&&mp.getPlayerResponse){" +
+            "var pr=mp.getPlayerResponse()||{},st=mp.getVideoStats?mp.getVideoStats():{};" +
+            "var fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],cur=null,p={};" +
+            "fs.forEach(function(f){if(String(f.itag)===String(st.fmt))cur=f;" +
+            "if(f.projectionType)p[f.projectionType+'/'+(f.stereoLayout||'-')]=1;});" +
+            "if(cur)s.push('playing itag '+cur.itag+' '+String(cur.mimeType||'').split(';')[0]+' '+cur.width+'x'+cur.height+" +
+            "' proj='+cur.projectionType+' stereo='+(cur.stereoLayout||'-'));" +
+            "s.push('formats: '+Object.keys(p).join(', '));" +
+            "if(mp.getSphericalProperties)s.push('spherical '+JSON.stringify(mp.getSphericalProperties()));}" +
+            "}catch(e){s.push('err '+e);}return s;}" +
+            "function draw(t){if(!run)return;requestAnimationFrame(draw);var v=findVideo();" +
+            "var d=window.devicePixelRatio||1,W=Math.round(innerWidth*d),H=Math.round(innerHeight*d);" +
+            "if(c.width!==W||c.height!==H){c.width=W;c.height=H;}var g=c.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,W,H);" +
+            "if(!v||!v.videoWidth){c.__r=null;g.fillStyle='#ff0';g.font=(16*d)+'px sans-serif';g.fillText('找不到影片',10*d,24*d);return;}" +
+            "var a=v.videoWidth/v.videoHeight,w=W,h=W/a;if(h>H){h=H;w=H*a;}var x=(W-w)/2,y=(H-h)/2;" +
+            "try{g.drawImage(v,x,y,w,h);}catch(e){}c.__r=[x/W,y/H,w/W,h/H];" +
+            "if(t-last>1000){last=t;lines=info(v);}g.font=(13*d)+'px sans-serif';" +
+            "lines.forEach(function(l,i){var ty=(16+i*17)*d;g.fillStyle='rgba(0,0,0,0.6)';" +
+            "g.fillRect(4*d,ty-13*d,g.measureText(l).width+8*d,17*d);g.fillStyle='#ff0';g.fillText(l,8*d,ty);});}" +
+            "requestAnimationFrame(draw);})($on)")
+    }
+
     fun pause() {
         js("(function(){$FIND_VIDEO if(v)v.pause();})()")
     }
@@ -217,7 +252,7 @@ class WebPresentation(
      * player = true 時取 YouTube 播放器整塊。
      */
     fun videoRect(player: Boolean, cb: (FloatArray?) -> Unit) {
-        js("(function(pl){var e=null;" +
+        js("(function(pl){var rc=document.getElementById('__vrraw');if(rc&&rc.__r)return rc.__r;var e=null;" +
                 "if(pl){e=document.getElementById('movie_player')||document.querySelector('.html5-video-player');}" +
                 "if(!e){$FIND_VIDEO e=v;}" +
                 "if(!e)return null;var r=e.getBoundingClientRect(),W=window.innerWidth,H=window.innerHeight;" +
@@ -309,6 +344,9 @@ class WebPresentation(
 private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
     "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
+
+// 同上,包成函式(給一直重複執行的程式用)
+private const val FIND_VIDEO_FN = "function findVideo(){$FIND_VIDEO return v;}"
 
 // 拿掉網頁「禁止縮放」的設定(user-scalable=no、maximum-scale=1)
 private const val ALLOW_ZOOM =

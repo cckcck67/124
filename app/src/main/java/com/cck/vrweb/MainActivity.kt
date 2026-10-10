@@ -201,10 +201,18 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 介面 ----------------
 
     private lateinit var qualityButton: Button
+    // 測試用:在網頁最上層顯示影片原始畫面與 YouTube 標註的格式(VR 模式也用這個畫面)
+    private lateinit var rawButton: Button
+    private var rawOn = false
 
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
         qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
+        rawButton = button("原始:關") {
+            rawOn = !rawOn
+            rawButton.text = if (rawOn) "原始:開" else "原始:關"
+            presentation?.showRaw(rawOn)
+        }
 
         urlInput = EditText(this).apply {
             setSingleLine()
@@ -227,6 +235,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("★") { showBookmarks() })
             addView(qualityButton)
+            addView(rawButton)
             addView(button("VR") { setVr(true) })
         }
 
@@ -560,6 +569,7 @@ class MainActivity : Activity(), SensorEventListener {
             if (!ticking) return
             val p = presentation
             if (p != null) {
+                if (rawOn) p.showRaw(true)   // 換頁後重新加上(已存在就不動)
                 if (!vrMode) {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
