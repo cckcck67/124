@@ -19,6 +19,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Cache depth model
+        uses: actions/cache@v4
+        with:
+          path: depth.onnx
+          key: depth-anything-v2-small-quantized
+      - name: Fetch depth model (Depth Anything V2 Small, Apache-2.0)
+        run: |
+          if [ ! -s depth.onnx ]; then
+            curl -fL --retry 3 -o depth.onnx https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx
+          fi
+          ls -l depth.onnx
+          pip install --quiet onnx
+          python3 -c "import onnx; m=onnx.load('depth.onnx'); print('inputs', [(i.name, [d.dim_value or d.dim_param for d in i.type.tensor_type.shape.dim]) for i in m.graph.input]); print('outputs', [(o.name, [d.dim_value or d.dim_param for d in o.type.tensor_type.shape.dim]) for o in m.graph.output])"
       - name: Startup test (must pass before publishing)
         run: gradle testDebugUnitTest -PbuildNumber=${{ github.run_number }}
       - name: Build debug APK
@@ -42,3 +55,4 @@ jobs:
           files: |
             VrWebPlayer.apk
             version.json
+            depth.onnx

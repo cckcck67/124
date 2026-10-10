@@ -16,6 +16,8 @@ android {
         targetSdk = 34
         versionCode = 100 + buildNumber
         versionName = "1.$buildNumber"
+        // 只打包 64 位元 ARM(小米9 等現代手機),深度模型的執行程式庫才不會讓 APK 變太大
+        ndk { abiFilters += "arm64-v8a" }
     }
     // 固定簽章:每次編譯出來的 APK 簽章相同,新版可直接安裝覆蓋舊版(不用先解除安裝)
     signingConfigs {
@@ -48,6 +50,8 @@ android {
 }
 
 dependencies {
+    // 立體照:在手機上跑深度估計模型
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     // 只用在啟動測試(不會打包進 App)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")

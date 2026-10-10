@@ -14,6 +14,7 @@ import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioManager
+import android.media.MediaCodecList
 import android.net.Uri
 import android.opengl.GLSurfaceView
 import android.os.Build
@@ -51,11 +52,15 @@ class MainActivity : Activity(), SensorEventListener {
 
     companion object {
         // 網頁所在虛擬螢幕的畫質(16:9)。DPI 跟著解析度等比例調整,網頁排版都和 1280x720@240 相同
-        val QUALITY_W = intArrayOf(1920, 2560, 3840)
-        val QUALITY_H = intArrayOf(1080, 1440, 2160)
-        val QUALITY_DPI = intArrayOf(360, 480, 720)
-        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
+        val QUALITY_W = intArrayOf(1920, 2560, 3840, 7680)
+        val QUALITY_H = intArrayOf(1080, 1440, 2160, 4320)
+        val QUALITY_DPI = intArrayOf(360, 480, 720, 1440)
+        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K", "8K")
         const val QUALITY_4K = 2
+        const val QUALITY_8K = 3
+
+        /** App 內建首頁 */
+        const val HOME_URL = "file:///android_asset/home.html"
 
         const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
@@ -156,7 +161,7 @@ class MainActivity : Activity(), SensorEventListener {
         srcW = QUALITY_W[quality]
         srcH = QUALITY_H[quality]
         renderer = VrRenderer(srcW, srcH) { st -> handler.post { attachSurface(st) } }
-        renderer.useMipmap = quality == QUALITY_4K
+        renderer.useMipmap = quality >= QUALITY_4K
         renderer.distortion = prefs.getFloat("k", 0.15f)
         VrMenu.lying = prefs.getBoolean("lying", false)
 
@@ -195,13 +200,15 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 介面 ----------------
 
+    private lateinit var qualityButton: Button
+
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
+        qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
 
         urlInput = EditText(this).apply {
             setSingleLine()
             hint = "網址 / 關鍵字(yt 開頭 = 搜尋 YouTube)"
-            setText(prefs.getString("url", "https://m.youtube.com"))
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             imeOptions = EditorInfo.IME_ACTION_GO
@@ -216,9 +223,10 @@ class MainActivity : Activity(), SensorEventListener {
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(bg)
             addView(button("←") { presentation?.handleBack() })
+            addView(button("首頁") { openUrl(HOME_URL) })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("★") { showBookmarks() })
-            addView(button("前往") { go() })
+            addView(qualityButton)
             addView(button("VR") { setVr(true) })
         }
 
@@ -232,6 +240,44 @@ class MainActivity : Activity(), SensorEventListener {
         }
         setContentView(root)
     }
+
+    /** 網址列「畫質」:選好後重新載入目前網頁(回到原本的播放位置) */
+    private fun chooseQuality() {
+        hideKeyboard()
+        val names = arrayOf("1080p", "1440p(預設)", "4K", "8K(實驗)")
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("畫質(越高越清楚,但越耗電)")
+            .setSingleChoiceItems(names, quality) { d, i ->
+                d.dismiss()
+                if (i == QUALITY_8K && quality != QUALITY_8K && !decoderSupports8K()) {
+                    val warn = AlertDialog.Builder(this)
+                        .setTitle("這支手機可能播不了 8K")
+                        .setMessage("手機的影片解碼器不支援 8K,網站多半只會給 4K 或更低的畫質,還可能變卡。要繼續嗎?")
+                        .setPositiveButton("仍要使用") { _, _ -> setQuality(i) }
+                        .setNegativeButton("取消", null)
+                        .create()
+                    warn.setOnDismissListener { hideSystemBars() }
+                    warn.show()
+                } else {
+                    setQuality(i)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
+
+    /** 手機有沒有能解 8K(7680x4320)的影片解碼器 */
+    private fun decoderSupports8K(): Boolean = try {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { ci ->
+            !ci.isEncoder && ci.supportedTypes.any { t ->
+                t.startsWith("video/") && try {
+                    ci.getCapabilitiesForType(t).videoCapabilities?.isSizeSupported(7680, 4320) == true
+                } catch (e: Exception) { false }
+            }
+        }
+    } catch (e: Exception) { false }
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
         this.text = text
@@ -256,6 +302,7 @@ class MainActivity : Activity(), SensorEventListener {
         },
         Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
+        Setting("photo", "立體照強度", 0.005f, 0f, 0.1f, "%.3f", { 0.03f }) { renderer.photoStrength = it },
     ) }
 
     private val sphereSettings by lazy { listOf(
@@ -275,6 +322,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     /** 切換模式:套用這個模式自己存的設定 */
     private fun setMode(m: Int) {
+        if (m != VrRenderer.MODE_2D) stopPhoto()
         renderer.mode = m
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
@@ -291,10 +339,6 @@ class MainActivity : Activity(), SensorEventListener {
             presentation?.setSpeed(speeds[speedIndex])
             return
         }
-        if (i == list.size + 1) {   // 畫質(所有模式共用)
-            setQuality((quality + dir).coerceIn(0, QUALITY_NAMES.size - 1))
-            return
-        }
         val st = list.getOrNull(i) ?: return
         val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
         prefs.edit().putFloat("m${m}_${st.key}", v).apply()
@@ -305,7 +349,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun refreshSettingRows() {
         val m = renderer.mode
         menu.settingRows = modeSettings(m).map { it.name to it.format.format(settingValue(m, it)) } +
-                ("速度" to "${speeds[speedIndex]}x") + ("畫質" to QUALITY_NAMES[quality])
+                ("速度" to "${speeds[speedIndex]}x")
     }
 
     /**
@@ -335,11 +379,11 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun openUrl(url: String) {
-        urlInput.setText(url)
+        urlInput.setText(if (url == HOME_URL) "" else url)
         presentation?.loadUrl(url)
         hideKeyboard()
-        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現
-        barShown = false
+        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現(首頁不收)
+        barShown = url == HOME_URL
         updateTopBar()
     }
 
@@ -468,7 +512,7 @@ class MainActivity : Activity(), SensorEventListener {
         val surface = Surface(st)
         displaySurface = surface
         virtualDisplay?.let { it.surface = surface; return }
-        createDisplay(prefs.getString("url", "https://m.youtube.com")!!, -1.0)
+        createDisplay(HOME_URL, -1.0)   // 開啟 App 先到首頁
     }
 
     /** 建立虛擬螢幕與上面的網頁(私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限) */
@@ -496,7 +540,7 @@ class MainActivity : Activity(), SensorEventListener {
         prefs.edit().putInt("quality", q).apply()
         srcW = QUALITY_W[q]
         srcH = QUALITY_H[q]
-        val url = presentation?.currentUrl ?: prefs.getString("url", "https://m.youtube.com")!!
+        val url = presentation?.currentUrl ?: HOME_URL
         val at = if (menu.hasVideo) menu.current else -1.0
         presentation?.release()
         presentation?.dismiss()
@@ -504,7 +548,8 @@ class MainActivity : Activity(), SensorEventListener {
         presentation = null
         virtualDisplay = null
         renderer.setBufferSize(srcW, srcH)
-        renderer.useMipmap = q == QUALITY_4K
+        renderer.useMipmap = q >= QUALITY_4K
+        qualityButton.text = QUALITY_NAMES[q]
         createDisplay(url, at)
     }
 
@@ -528,13 +573,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if (renderer.vrMode && renderer.mode != VrRenderer.MODE_2D) {
                     // 找出影片在網頁中的位置,VR 畫面只取影片本身
                     p.videoRect(false) { r ->
-                        renderer.crop = if (r == null) floatArrayOf(0f, 0f, 1f, 1f) else {
-                            val x = r[0].coerceIn(0f, 1f)
-                            val y = r[1].coerceIn(0f, 1f)
-                            val w = r[2].coerceIn(0.05f, 1f - x)
-                            val h = r[3].coerceIn(0.05f, 1f - y)
-                            floatArrayOf(x, 1f - y - h, w, h)   // 轉成 y 向上
-                        }
+                        renderer.crop = toCrop(r)
                         redraw()
                     }
                 }
@@ -543,9 +582,20 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
 
+    /** 網頁回報的影片位置(y 向下)→ 渲染用的 [x, y, 寬, 高](y 向上);找不到影片 = 整頁 */
+    private fun toCrop(r: FloatArray?): FloatArray {
+        if (r == null) return floatArrayOf(0f, 0f, 1f, 1f)
+        val x = r[0].coerceIn(0f, 1f)
+        val y = r[1].coerceIn(0f, 1f)
+        val w = r[2].coerceIn(0.05f, 1f - x)
+        val h = r[3].coerceIn(0.05f, 1f - y)
+        return floatArrayOf(x, 1f - y - h, w, h)
+    }
+
     // ---------------- 模式切換 ----------------
 
     private fun setVr(on: Boolean) {
+        stopPhoto()
         vrMode = on
         renderer.vrMode = on
         renderer.showCursor = false
@@ -686,7 +736,10 @@ class MainActivity : Activity(), SensorEventListener {
     private fun onSelect() {
         when {
             menuOpen -> if (menu.hover != VrMenu.NONE) activate(menu.hover)
-            else -> presentation?.togglePlay()      // 沒開面板時點一下 = 播放/暫停
+            else -> {
+                stopPhoto()                          // 看立體照時點一下 = 回到影片繼續播
+                presentation?.togglePlay()           // 沒開面板時點一下 = 播放/暫停
+            }
         }
     }
 
@@ -768,6 +821,15 @@ class MainActivity : Activity(), SensorEventListener {
         // 視線在參考座標中的左右角度與低頭角度,交給主執行緒處理面板
         sensorAz = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
         sensorDown = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        if (renderer.photoOn) {
+            // 立體照:轉頭時近的東西相對移動一點(視差)
+            var dx = sensorAz - photoAz
+            if (dx > PI) dx -= (2 * PI).toFloat()
+            if (dx < -PI) dx += (2 * PI).toFloat()
+            renderer.photoLookX = dx
+            renderer.photoLookY = photoDown - sensorDown
+            redraw()
+        }
         if (!menuStepPosted) {
             menuStepPosted = true
             handler.post(menuStep)
@@ -882,6 +944,7 @@ class MainActivity : Activity(), SensorEventListener {
         val p = presentation ?: return
         when (target) {
             VrMenu.BAR -> {
+                stopPhoto()
                 p.seekTo(menu.hoverFrac)
                 menu.current = menu.hoverFrac * menu.duration
             }
@@ -893,7 +956,8 @@ class MainActivity : Activity(), SensorEventListener {
                 setMenu(false)
                 return
             }
-            VrMenu.BTN_FWD -> p.seekBy(10)
+            VrMenu.BTN_FWD -> { stopPhoto(); p.seekBy(10) }
+            VrMenu.BTN_PHOTO -> startPhoto()
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
@@ -918,6 +982,114 @@ class MainActivity : Activity(), SensorEventListener {
         }
         handler.postDelayed({ pollStatus() }, 300)
         redrawPanel(force = true)
+    }
+
+    // ---------------- 立體照 ----------------
+
+    private var photoBusy = false
+    @Volatile private var photoAz = 0f
+    @Volatile private var photoDown = 0f
+
+    /** 面板「立體照」:暫停影片 → 拍下畫面 → 手機上算深度 → 兩眼依深度錯開,變成立體 */
+    private fun startPhoto() {
+        if (renderer.photoOn) { stopPhoto(); return }
+        if (photoBusy) return
+        if (renderer.mode != VrRenderer.MODE_2D) {
+            showMessage("請先切到", "2D 模式", 2500)
+            return
+        }
+        val p = presentation ?: return
+        photoBusy = true
+        showMessage("拍照中", "")
+        p.pause()
+        p.videoRect(false) { r ->
+            val c = toCrop(r)
+            handler.postDelayed({ capturePhoto(c) }, 400)   // 等暫停後的最後一格畫面
+        }
+    }
+
+    private fun capturePhoto(c: FloatArray) {
+        val (w, h) = DepthModel.inputSize(c[2] * srcW / (c[3] * srcH))
+        glView.queueEvent {
+            val rgba = try { renderer.capturePhoto(c, w, h) } catch (e: Exception) { null }
+            handler.post {
+                if (rgba == null) { photoFailed("拍照失敗"); return@post }
+                Thread {
+                    try {
+                        if (!DepthModel.isDownloaded(this)) {
+                            handler.post { showMessage("下載模型", "0%") }
+                            DepthModel.download(this) { pct -> handler.post { showMessage("下載模型", "$pct%") } }
+                        }
+                        handler.post { showMessage("計算深度", "請稍候") }
+                        val d = DepthModel.estimate(this, rgba, w, h)
+                        handler.post {
+                            photoBusy = false
+                            // 算好前已離開 VR 或換了模式就不顯示
+                            if (!vrMode || renderer.mode != VrRenderer.MODE_2D) { hideMessage(); return@post }
+                            photoAz = sensorAz
+                            photoDown = sensorDown
+                            renderer.photoLookX = 0f
+                            renderer.photoLookY = 0f
+                            glView.queueEvent { renderer.setDepth(d, w, h) }
+                            menu.photo = true
+                            hideMessage()
+                            redrawPanel(force = true)
+                        }
+                    } catch (e: Throwable) {
+                        handler.post { photoFailed(if (e is java.io.IOException) "下載失敗" else "計算失敗") }
+                    }
+                }.start()
+            }
+        }
+        redraw()
+    }
+
+    private fun photoFailed(msg: String) {
+        photoBusy = false
+        showMessage(msg, "請再試一次", 3000)
+    }
+
+    private fun stopPhoto() {
+        if (!renderer.photoOn && !menu.photo) return
+        renderer.photoOn = false
+        menu.photo = false
+        redrawPanel(force = true)
+        redraw()
+    }
+
+    private val msgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        textSize = VrRenderer.HUD * 0.17f
+        isFakeBoldText = true
+        color = 0xFFFFFFFF.toInt()
+    }
+
+    private val hideMsg = Runnable { hideMessage() }
+
+    /** 畫面正中央的提示(兩行);hideAfter > 0 時自動消失 */
+    private fun showMessage(line1: String, line2: String, hideAfter: Long = 0L) {
+        handler.removeCallbacks(hideMsg)
+        renderer.updateHud { b ->
+            b.eraseColor(0)
+            val c = Canvas(b)
+            val h = VrRenderer.HUD.toFloat()
+            msgPaint.color = 0xCC000000.toInt()
+            c.drawCircle(h / 2, h / 2, h / 2 - 4, msgPaint)
+            msgPaint.color = 0xFFFFFFFF.toInt()
+            if (line2.isEmpty()) c.drawText(line1, h / 2, h / 2 + msgPaint.textSize * 0.35f, msgPaint)
+            else {
+                c.drawText(line1, h / 2, h / 2 - msgPaint.textSize * 0.25f, msgPaint)
+                c.drawText(line2, h / 2, h / 2 + msgPaint.textSize * 0.95f, msgPaint)
+            }
+        }
+        renderer.showHud = true
+        if (hideAfter > 0) handler.postDelayed(hideMsg, hideAfter)
+    }
+
+    private fun hideMessage() {
+        handler.removeCallbacks(hideMsg)
+        if (recenterAt == 0L) renderer.showHud = false
+        redraw()
     }
 
     // ---------------- 置中倒數 ----------------

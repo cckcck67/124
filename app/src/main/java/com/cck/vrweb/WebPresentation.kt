@@ -208,6 +208,10 @@ class WebPresentation(
         }
     }
 
+    fun pause() {
+        js("(function(){$FIND_VIDEO if(v)v.pause();})()")
+    }
+
     /**
      * 影片在網頁畫面中的位置 [x, y, 寬, 高](比例,y 向下);找不到回傳 null。
      * player = true 時取 YouTube 播放器整塊。
