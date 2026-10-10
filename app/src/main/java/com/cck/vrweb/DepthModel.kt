@@ -128,6 +128,23 @@ object DepthModel {
                 res[y * w + x] = (v * 255f).toInt().toByte()
             }
         }
-        return res
+        return smooth(res, w, h)
+    }
+
+    /** 深度圖稍微模糊:物體邊緣的遠近變化平順一點,錯開時邊緣不會被撕開 */
+    private fun smooth(src: ByteArray, w: Int, h: Int, r: Int = 2): ByteArray {
+        val tmp = IntArray(w * h)
+        val out = ByteArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            var sum = 0; var n = 0
+            for (k in -r..r) { val xx = x + k; if (xx in 0 until w) { sum += src[y * w + xx].toInt() and 0xFF; n++ } }
+            tmp[y * w + x] = sum / n
+        }
+        for (y in 0 until h) for (x in 0 until w) {
+            var sum = 0; var n = 0
+            for (k in -r..r) { val yy = y + k; if (yy in 0 until h) { sum += tmp[yy * w + x]; n++ } }
+            out[y * w + x] = (sum / n).toByte()
+        }
+        return out
     }
 }

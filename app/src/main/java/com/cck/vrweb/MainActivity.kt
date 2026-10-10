@@ -831,15 +831,6 @@ class MainActivity : Activity(), SensorEventListener {
         // 視線在參考座標中的左右角度與低頭角度,交給主執行緒處理面板
         sensorAz = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
         sensorDown = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
-        if (renderer.photoOn) {
-            // 立體照:轉頭時近的東西相對移動一點(視差)
-            var dx = sensorAz - photoAz
-            if (dx > PI) dx -= (2 * PI).toFloat()
-            if (dx < -PI) dx += (2 * PI).toFloat()
-            renderer.photoLookX = dx
-            renderer.photoLookY = photoDown - sensorDown
-            redraw()
-        }
         if (!menuStepPosted) {
             menuStepPosted = true
             handler.post(menuStep)
@@ -997,8 +988,6 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 立體照 ----------------
 
     private var photoBusy = false
-    @Volatile private var photoAz = 0f
-    @Volatile private var photoDown = 0f
 
     /** 面板「立體照」:暫停影片 → 拍下畫面 → 手機上算深度 → 兩眼依深度錯開,變成立體 */
     private fun startPhoto() {
@@ -1036,10 +1025,6 @@ class MainActivity : Activity(), SensorEventListener {
                             photoBusy = false
                             // 算好前已離開 VR 或換了模式就不顯示
                             if (!vrMode || renderer.mode != VrRenderer.MODE_2D) { hideMessage(); return@post }
-                            photoAz = sensorAz
-                            photoDown = sensorDown
-                            renderer.photoLookX = 0f
-                            renderer.photoLookY = 0f
                             glView.queueEvent { renderer.setDepth(d, w, h) }
                             menu.photo = true
                             hideMessage()

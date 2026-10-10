@@ -139,7 +139,9 @@ class VrRenderer(
         """
 
         // 立體照:依深度圖把畫面左右錯開(每隻眼睛方向相反),近的東西錯開多、遠的少
-        // uShift = 每單位深度的位移(含轉頭視差),uFocus = 不位移的深度(螢幕平面)
+        // uShift = 每單位深度的位移,uFocus = 不位移的深度(螢幕平面)
+        // 由近到遠逐層找「位移後蓋住這個點」的第一個表面:前面的東西擋住後面的,
+        // 邊緣不會出現重複或被切開的影像,露出的背景用旁邊的背景補
         private const val PHOTO_FS = """
             #ifdef GL_FRAGMENT_PRECISION_HIGH
             precision highp float;
@@ -159,13 +161,16 @@ class VrRenderer(
                     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
                 }
-                // 找出「位移後剛好落在這裡」的來源點(反覆逼近幾次)
-                vec2 p = uv;
-                for (int i = 0; i < 5; i++) {
-                    float d = texture2D(uDepth, p).r;
-                    p = clamp(uv - uShift * (d - uFocus), 0.0, 1.0);
+                vec2 hit = clamp(uv + uShift * uFocus, 0.0, 1.0);   // 都沒找到 = 最遠的背景
+                for (int i = 0; i <= 32; i++) {
+                    float t = 1.0 - float(i) / 32.0;              // 深度層:1 = 最近
+                    vec2 p = uv - uShift * (t - uFocus);
+                    if (texture2D(uDepth, clamp(p, 0.0, 1.0)).r >= t - 0.5 / 32.0) {
+                        hit = clamp(p, 0.0, 1.0);
+                        break;
+                    }
                 }
-                gl_FragColor = texture2D(uTex, p);
+                gl_FragColor = texture2D(uTex, hit);
             }
         """
 
@@ -239,8 +244,6 @@ class VrRenderer(
     // ---- 立體照(暫停畫面 + 深度圖) ----
     @Volatile var photoOn = false
     @Volatile var photoStrength = 0.03f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
-    @Volatile var photoLookX = 0f         // 轉頭造成的視差(弧度,相對於拍下時)
-    @Volatile var photoLookY = 0f
     private var photoTex = 0
     private var depthTex = 0
     private var photoFbo = 0
@@ -626,11 +629,8 @@ class VrRenderer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glUniform1f(pK, distortion)
         GLES20.glUniform1f(pTilt, -side * tilt)
-        // 左眼(side = -1)近的東西往右、右眼往左;轉頭時近的東西反方向移動一點(視差)
-        val s = photoStrength / 2f
-        val lx = photoLookX.coerceIn(-0.5f, 0.5f)
-        val ly = photoLookY.coerceIn(-0.5f, 0.5f)
-        GLES20.glUniform2f(pShift, -side * s - lx * photoStrength, -ly * photoStrength * photoAspect)
+        // 左眼(side = -1)近的東西往右、右眼往左
+        GLES20.glUniform2f(pShift, -side * photoStrength / 2f, 0f)
         GLES20.glUniform1f(pFocus, 0.4f)
         bindQuad(pPos, pUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)

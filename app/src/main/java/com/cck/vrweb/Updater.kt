@@ -2,24 +2,28 @@ package com.cck.vrweb
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
  * App 自動更新:開啟時到 GitHub Releases 讀 version.json,
- * 有新版就詢問,同意後下載 APK 並交給系統安裝(使用者只要按「安裝」)。
+ * 有新版就詢問,同意後下載 APK 並打開系統的安裝畫面(使用者只要按「安裝」)。
  */
 class Updater(private val activity: Activity, private val onDialogClosed: () -> Unit) {
 
@@ -94,19 +98,23 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
 
         Thread {
             try {
-                val apk = download(APK_URL) { pct ->
+                val file = ApkProvider.file(activity)
+                download(APK_URL, file) { pct ->
                     main.post { progress.setMessage("下載中… $pct%") }
                 }
-                main.post { progress.setMessage("準備安裝…") }
-                install(apk)
-                main.post { progress.dismiss(); onDialogClosed() }
+                main.post {
+                    progress.dismiss()
+                    onDialogClosed()
+                    install()
+                }
             } catch (e: Exception) {
                 main.post {
                     progress.dismiss()
                     AlertDialog.Builder(activity)
                         .setTitle("更新失敗")
                         .setMessage("無法下載新版本:${e.message}")
-                        .setPositiveButton("確定", null)
+                        .setPositiveButton("用瀏覽器下載") { _, _ -> openInBrowser(activity) }
+                        .setNegativeButton("取消", null)
                         .setOnDismissListener { onDialogClosed() }
                         .show()
                 }
@@ -114,8 +122,43 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
         }.start()
     }
 
-    /** 下載整個檔案(會自動跟著 GitHub 的轉址) */
-    private fun download(url: String, onProgress: ((Int) -> Unit)? = null): ByteArray {
+    /** 下載小檔案到記憶體(會自動跟著 GitHub 的轉址) */
+    private fun download(url: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        open(url) { conn ->
+            conn.inputStream.use { it.copyTo(out) }
+        }
+        return out.toByteArray()
+    }
+
+    /** 下載到檔案,回報 0~100 */
+    private fun download(url: String, file: File, onProgress: (Int) -> Unit) {
+        val tmp = File(file.parentFile, file.name + ".part")
+        open(url) { conn ->
+            val total = conn.contentLength.toLong()
+            var done = 0L
+            var last = -1
+            conn.inputStream.use { input ->
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        if (total > 0) {
+                            val pct = (done * 100 / total).toInt()
+                            if (pct != last) { last = pct; onProgress(pct) }
+                        }
+                    }
+                }
+            }
+        }
+        file.delete()
+        if (!tmp.renameTo(file)) throw Exception("無法儲存檔案")
+    }
+
+    private fun open(url: String, body: (HttpURLConnection) -> Unit) {
         var target = URL(url)
         repeat(5) {
             val conn = target.openConnection() as HttpURLConnection
@@ -129,65 +172,54 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
                 return@repeat
             }
             if (codeHttp != 200) throw Exception("HTTP $codeHttp")
-            val total = conn.contentLength
-            val out = java.io.ByteArrayOutputStream(if (total > 0) total else 1 shl 20)
-            conn.inputStream.use { input ->
-                val buf = ByteArray(64 * 1024)
-                var last = -1
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    if (total > 0 && onProgress != null) {
-                        val pct = (out.size() * 100L / total).toInt()
-                        if (pct != last) { last = pct; onProgress(pct) }
-                    }
-                }
-            }
-            return out.toByteArray()
+            body(conn)
+            return
         }
         throw Exception("轉址太多次")
     }
 
-    /** 用系統的套件安裝程式安裝;系統會跳出確認畫面 */
-    private fun install(apk: ByteArray) {
-        val installer = activity.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        val id = installer.createSession(params)
-        installer.openSession(id).use { session ->
-            session.openWrite("VrWebPlayer.apk", 0, apk.size.toLong()).use { out ->
-                out.write(apk)
-                session.fsync(out)
-            }
-            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(
-                activity, id, Intent(activity, InstallReceiver::class.java), flags)
-            session.commit(pi.intentSender)
+    /**
+     * 交給系統的安裝程式(和用瀏覽器下載後點開一樣的方式;小米手機會擋 App 內直接安裝)。
+     * 打不開安裝畫面就改用瀏覽器下載。
+     */
+    private fun install() {
+        val i = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(ApkProvider.uri(activity), ApkProvider.MIME)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            activity.startActivity(i)
+        } catch (e: Exception) {
+            Toast.makeText(activity, "打不開安裝畫面,改用瀏覽器下載新版", Toast.LENGTH_LONG).show()
+            openInBrowser(activity)
         }
     }
 }
 
-/**
- * 接收安裝結果:需要使用者確認時打開系統的安裝確認畫面;
- * 安裝失敗(例如小米手機擋下)就顯示原因,並改用瀏覽器下載新版。
- */
-class InstallReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-        when (status) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                @Suppress("DEPRECATION")
-                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(confirm)
-            }
-            PackageInstaller.STATUS_SUCCESS -> {}
-            PackageInstaller.STATUS_FAILURE_ABORTED -> {}   // 使用者自己按取消
-            else -> {
-                val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "代碼 $status"
-                Toast.makeText(context, "App 內安裝失敗($msg),改用瀏覽器下載新版", Toast.LENGTH_LONG).show()
-                Updater.openInBrowser(context)
-            }
-        }
+/** 把下載好的新版 APK 提供給系統安裝程式讀取(只有這一個檔案,不對外公開) */
+class ApkProvider : ContentProvider() {
+    companion object {
+        const val MIME = "application/vnd.android.package-archive"
+        private const val NAME = "VrWebPlayer.apk"
+        fun file(ctx: Context) = File(File(ctx.cacheDir, "update").apply { mkdirs() }, NAME)
+        fun uri(ctx: Context): Uri = Uri.parse("content://${ctx.packageName}.apk/$NAME")
     }
+
+    override fun onCreate() = true
+    override fun getType(uri: Uri) = MIME
+
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor =
+        ParcelFileDescriptor.open(file(context!!), ParcelFileDescriptor.MODE_READ_ONLY)
+
+    override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+                       selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
+        val f = file(context!!)
+        val cols = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        val c = MatrixCursor(cols)
+        c.addRow(cols.map { if (it == OpenableColumns.SIZE) f.length() else if (it == OpenableColumns.DISPLAY_NAME) NAME else null })
+        return c
+    }
+
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
 }
