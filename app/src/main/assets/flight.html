@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>空中遊覽</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #map { position: fixed; inset: 0; }
+  #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.5vh; background: #111; }
+  #menu h1 { margin: 0 0 1vh; font-size: 7vh; }
+  #list { display: grid; grid-template-columns: repeat(3, 28vw); gap: 2vh 2vw; }
+  #list button { font-size: 4vh; padding: 2.5vh 0; border: 0; border-radius: 1.5vh; background: #2f5a88; color: #fff; }
+  #msg { font-size: 3.2vh; color: #fd4; text-align: center; max-width: 80vw; }
+  #msg button { font-size: 3.2vh; margin-top: 1.5vh; padding: 1vh 3vh; }
+  #title { position: fixed; left: 0; right: 0; top: 3vh; text-align: center; font-size: 5vh;
+           text-shadow: 0 0 1vh #000, 0 0 2vh #000; pointer-events: none; transition: opacity 2s; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="title"></div>
+<div id="menu">
+  <h1>空中遊覽</h1>
+  <div id="list"></div>
+  <div id="msg"></div>
+</div>
+<script>
+// 目的地:繞著地標慢慢飛一圈(半徑 r 公尺、高度 alt 公尺、地標高度 top 公尺、一圈 min 分鐘)
+var PLACES = [
+  { name: '台北101',   lat: 25.0340, lng: 121.5645, r: 900,  alt: 650,  top: 300,  min: 4 },
+  { name: '京都 清水寺', lat: 34.9949, lng: 135.7850, r: 600,  alt: 420,  top: 120,  min: 4 },
+  { name: '日月潭',     lat: 23.8572, lng: 120.9150, r: 2500, alt: 1400, top: 760,  min: 6 },
+  { name: '富士山',     lat: 35.3606, lng: 138.7274, r: 9000, alt: 5200, top: 3300, min: 8 },
+  { name: '巴黎 鐵塔',   lat: 48.8584, lng: 2.2945,   r: 800,  alt: 450,  top: 180,  min: 4 },
+  { name: '紐約 曼哈頓', lat: 40.7580, lng: -73.9855, r: 1200, alt: 550,  top: 200,  min: 5 }
+];
+
+var key = '', map = null, place = null, start = 0;
+var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
+
+function $(id) { return document.getElementById(id); }
+function msg(html) { $('msg').innerHTML = html; }
+
+// App 傳入金鑰(只在 App 內建頁面才會傳)
+window.vrSetKey = function (k) {
+  key = k || '';
+  if (!key) {
+    msg('還沒有設定 Google 金鑰<br><button onclick="location.href=\'vrweb://key\'">設定金鑰</button>');
+    return;
+  }
+  msg('');
+};
+
+// App 傳入頭的方向
+window.vrLook = function (yaw, pitch) { lookYaw = yaw; lookPitch = pitch; };
+
+window.gm_authFailure = function () {
+  showMenu();
+  msg('金鑰無效,或沒有啟用 Maps JavaScript API<br><button onclick="location.href=\'vrweb://key\'">重新設定金鑰</button>');
+};
+
+function showMenu() { $('menu').style.display = 'flex'; }
+
+PLACES.forEach(function (p, i) {
+  var b = document.createElement('button');
+  b.textContent = p.name;
+  b.onclick = function () { go(i); };
+  $('list').appendChild(b);
+});
+
+var loading = null;
+function loadMaps() {
+  if (loading) return loading;
+  loading = new Promise(function (ok, fail) {
+    window.__mapsReady = ok;
+    var s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) +
+            '&v=beta&libraries=maps3d&language=zh-TW&callback=__mapsReady';
+    s.onerror = function () { fail(new Error('無法連線到 Google 地圖')); };
+    document.head.appendChild(s);
+  });
+  return loading;
+}
+
+function go(i) {
+  if (!key) { window.vrSetKey(''); return; }
+  place = PLACES[i];
+  msg('載入中…');
+  loadMaps().then(function () {
+    return google.maps.importLibrary('maps3d');
+  }).then(function (lib) {
+    if (!map) {
+      var opts = { center: { lat: place.lat, lng: place.lng, altitude: place.alt }, range: 1, tilt: 70, heading: 0 };
+      try { map = new lib.Map3DElement(Object.assign({ mode: 'SATELLITE', defaultUIHidden: true }, opts)); }
+      catch (e) { map = new lib.Map3DElement(opts); }
+      $('map').appendChild(map);
+    }
+    $('menu').style.display = 'none';
+    var t = $('title');
+    t.textContent = place.name;
+    t.style.opacity = 1;
+    setTimeout(function () { t.style.opacity = 0; }, 4000);
+    start = performance.now();
+    requestAnimationFrame(fly);
+  }).catch(function (e) {
+    msg('無法載入 3D 地圖:' + (e && e.message ? e.message : e));
+  });
+}
+
+// 每一格:相機沿著圓圈移動,預設看向地標;再加上轉頭的角度
+var M_PER_DEG = 111320;
+function fly(now) {
+  if (!place || $('menu').style.display !== 'none') return;
+  requestAnimationFrame(fly);
+  var p = place;
+  var a = ((now - start) / (p.min * 60000)) * 2 * Math.PI;      // 繞圈角度
+  var east = Math.sin(a) * p.r, north = Math.cos(a) * p.r;       // 相機相對地標的位置(公尺)
+  var lat = p.lat + north / M_PER_DEG;
+  var lng = p.lng + east / (M_PER_DEG * Math.cos(p.lat * Math.PI / 180));
+  var toCenter = (Math.atan2(-east, -north) * 180 / Math.PI + 360) % 360;   // 看向地標的方位
+  var down = Math.atan2(p.alt - p.top, p.r) * 180 / Math.PI;                 // 看向地標要低頭幾度
+  var tilt = Math.max(0, Math.min(90, 90 - down + lookPitch));               // 90 = 看水平
+  map.center = { lat: lat, lng: lng, altitude: p.alt };
+  map.range = 1;
+  map.heading = (toCenter + lookYaw + 360) % 360;
+  map.tilt = tilt;
+}
+
+// 返回目的地選單(App 的返回鍵會先回上一頁;這裡提供點兩下回選單)
+document.addEventListener('dblclick', function () { if (place) { place = null; showMenu(); } });
+</script>
+</body>
+</html>

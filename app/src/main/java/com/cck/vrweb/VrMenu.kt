@@ -54,7 +54,7 @@ class VrMenu {
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定")
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "YT環顧")
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧")
 
         // 設定頁:兩欄(項目多時三欄),每格 = 名稱與數值、−、+
         private const val SET_TOP = 80f

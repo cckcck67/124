@@ -35,7 +35,7 @@ class VrRenderer(
         const val MODE_SBS = 1       // 左右3D(平面)
         const val MODE_VR180 = 2     // 左右3D 半球影片(左半給左眼)
         const val MODE_TB360 = 3     // 上下3D 全景影片(上半給左眼,每半是 360 度攤平圖)
-        const val MODE_YT = 4        // YouTube 環顧:YouTube 依頭的方向轉好單眼畫面,兩眼看同一張
+        const val MODE_YT = 4        // 環顧:網頁(YouTube VR 影片、空中遊覽)依頭的方向轉好單眼畫面,兩眼看同一張
 
         /** 需要依頭部方向顯示的球面模式 */
         fun isSphere(m: Int) = m == MODE_VR180 || m == MODE_TB360

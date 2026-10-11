@@ -58,7 +58,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val QUALITY_4K = 2
 
         /** App 內建首頁 */
-        const val HOME_URL = "file:///android_asset/home.html"
+        const val HOME_URL = WebPresentation.APP_ORIGIN + "/assets/home.html"
 
         const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
@@ -381,6 +381,31 @@ class MainActivity : Activity(), SensorEventListener {
         topBar.visibility = if (show) View.VISIBLE else View.GONE
     }
 
+    // ---------------- Google 金鑰(空中遊覽) ----------------
+
+    /** 輸入 Google 地圖的 API 金鑰;只存在手機裡,不會放到 GitHub */
+    private fun askMapsKey() {
+        hideKeyboard()
+        val et = EditText(this).apply {
+            setSingleLine()
+            hint = "貼上 Google API 金鑰"
+            setText(prefs.getString("mapsKey", ""))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        val box = FrameLayout(this).apply { setPadding(48, 24, 48, 0); addView(et) }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Google 金鑰(空中遊覽用)")
+            .setView(box)
+            .setPositiveButton("儲存") { _, _ ->
+                prefs.edit().putString("mapsKey", et.text.toString().trim()).apply()
+                presentation?.reload()   // 重新載入,讓頁面拿到新金鑰
+            }
+            .setNegativeButton("取消", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
+
     // ---------------- 書籤 ----------------
 
     private class Bookmark(var title: String, var url: String)
@@ -513,6 +538,8 @@ class MainActivity : Activity(), SensorEventListener {
         )
         virtualDisplay = vd
         presentation = WebPresentation(this, vd.display, srcW, srcH).also {
+            it.appKey = { prefs.getString("mapsKey", "") ?: "" }
+            it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -618,6 +645,13 @@ class MainActivity : Activity(), SensorEventListener {
      */
     private fun autoDetectMode() {
         val p = presentation ?: return
+        // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
+        if (WebPresentation.isFlight(p.currentUrl)) {
+            ytHalf = false
+            if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
+            handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
+            return
+        }
         // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
         val onYouTube = WebPresentation.isYouTube(p.currentUrl)
         p.youtubeSpherical { proj ->
@@ -627,7 +661,7 @@ class MainActivity : Activity(), SensorEventListener {
             else detectByAspect(p)
             // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)
             if (onYouTube) handler.postDelayed({
-                if (vrMode) showMessage(if (yt) "YT環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
+                if (vrMode) showMessage(if (yt) "環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
             }, ENTER_DELAY_MS + 300)
         }
     }
@@ -901,7 +935,7 @@ class MainActivity : Activity(), SensorEventListener {
         lastYtAt = now
         lastYtYaw = yaw
         lastYtPitch = pitch
-        presentation?.youtubeLook(yaw, pitch, ytFov)
+        presentation?.lookAt(yaw, pitch, ytFov)
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
