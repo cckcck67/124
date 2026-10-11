@@ -2,6 +2,10 @@
 
 把網頁影片畫面切成左右兩份,放進 VR 盒子觀看。
 
+## 版本
+- **1.0 自用完整版**:已定版保存(標籤 `v1.0`),內容見 [docs/releases/v1.0.md](docs/releases/v1.0.md)
+- **2.0 研究 / 進化版**:進行中,方向與候選項目見 [docs/VERSIONS.md](docs/VERSIONS.md)
+
 ## 架構
 網頁 WebView → 私有虛擬螢幕 (VirtualDisplay + Presentation) → OpenGL 材質
 → 2D 模式畫一份 / VR 模式左右各一份(大小、位置、間距、翻轉角度可調)

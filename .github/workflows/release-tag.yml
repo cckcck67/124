@@ -1,0 +1,42 @@
+name: Publish tagged version
+
+# 推送 v 開頭的標籤(例如 v1.0)時,編譯並建立一個獨立保存的 Release,
+# 說明文字取自 docs/releases/<標籤>.md
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Startup test (must pass before publishing)
+        run: gradle testDebugUnitTest -PbuildNumber=${{ github.run_number }} -PversionLabel=${GITHUB_REF_NAME#v}
+      - name: Build debug APK
+        run: gradle assembleDebug -PbuildNumber=${{ github.run_number }} -PversionLabel=${GITHUB_REF_NAME#v}
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
+      - name: Publish release for this tag
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VR網頁播放器 ${{ github.ref_name }}(自用完整版)
+          body_path: docs/releases/${{ github.ref_name }}.md
+          prerelease: false
+          make_latest: false
+          files: VrWebPlayer.apk
