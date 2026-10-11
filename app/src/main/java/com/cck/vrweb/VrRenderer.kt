@@ -153,14 +153,12 @@ class VrRenderer(
             uniform float uK;
             uniform vec2 uShift;
             uniform float uFocus;
+            uniform vec4 uCrop;     // 照片在網頁畫面中的位置(x, y, 寬, 高),畫面其他部分照常顯示網頁
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv - 0.5;
-                vec2 uv = 0.5 + c * (1.0 + uK * dot(c, c));
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                    return;
-                }
+                vec2 uv = (0.5 + c * (1.0 + uK * dot(c, c)) - uCrop.xy) / uCrop.zw;
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
                 vec2 hit = clamp(uv + uShift * uFocus, 0.0, 1.0);   // 都沒找到 = 最遠的背景
                 for (int i = 0; i <= 32; i++) {
                     float t = 1.0 - float(i) / 32.0;              // 深度層:1 = 最近
@@ -243,13 +241,13 @@ class VrRenderer(
 
     // ---- 立體照(暫停畫面 + 深度圖) ----
     @Volatile var photoOn = false
-    @Volatile var photoStrength = 0.03f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
+    @Volatile var photoStrength = 0.05f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
     private var photoTex = 0
     private var depthTex = 0
     private var photoFbo = 0
     private var smallTex = 0
     private var smallFbo = 0
-    private var photoAspect = 16f / 9f
+    private var photoCrop = floatArrayOf(0f, 0f, 1f, 1f)   // 拍照時影片在網頁中的位置
     private var maxTex = 4096
 
     private var surfaceTexture: SurfaceTexture? = null
@@ -280,7 +278,7 @@ class VrRenderer(
     private lateinit var blitProg: Prog
     private var photoProg = 0
     private var pPos = 0; private var pUv = 0; private var pTex = 0; private var pDepth = 0
-    private var pK = 0; private var pTilt = 0; private var pShift = 0; private var pFocus = 0
+    private var pK = 0; private var pTilt = 0; private var pShift = 0; private var pFocus = 0; private var pCrop = 0
 
     // Mipmap 用的複製材質
     private var mipSupported = false
@@ -372,6 +370,7 @@ class VrRenderer(
         pTilt = GLES20.glGetUniformLocation(photoProg, "uTilt")
         pShift = GLES20.glGetUniformLocation(photoProg, "uShift")
         pFocus = GLES20.glGetUniformLocation(photoProg, "uFocus")
+        pCrop = GLES20.glGetUniformLocation(photoProg, "uCrop")
         // GL 環境重建後舊的材質都沒了,立體照要重拍
         photoTex = 0; depthTex = 0; photoFbo = 0; smallTex = 0; smallFbo = 0
         photoOn = false
@@ -570,15 +569,6 @@ class VrRenderer(
                 GLES20.glViewport((cx - eyeW / 2f).toInt(), 0, eyeW, viewH)
                 val lon = if (m == MODE_TB360) 0.5 / Math.PI else 1.0 / Math.PI
                 drawSphere(sx, sy, ox, oy, eyeW.toFloat() / viewH, lon.toFloat())
-            } else if (m == MODE_2D && photoOn) {
-                // 立體照:照片依自己的比例放在原本畫面的位置
-                val z = zoom
-                val vy = cy + lift * viewH
-                var w = r[2] * z
-                var h = r[3] * z
-                if (w / h > photoAspect) w = h * photoAspect else h = w / photoAspect
-                GLES20.glViewport((cx - w / 2f).toInt(), (vy - h / 2f).toInt(), w.toInt(), h.toInt())
-                drawPhoto(side)
             } else {
                 val z = zoom
                 val vy = cy + lift * viewH
@@ -587,6 +577,8 @@ class VrRenderer(
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
                 drawVideo(distortion, -side * tilt, sx, sy, ox, oy)
+                // 立體照:蓋在網頁中原本影片的位置,大小不變
+                if (m == MODE_2D && photoOn) drawPhoto(side)
             }
             // 控制面板與游標不放大、不移動,確保完整看得到;
             // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
@@ -632,6 +624,7 @@ class VrRenderer(
         // 左眼(side = -1)近的東西往右、右眼往左
         GLES20.glUniform2f(pShift, -side * photoStrength / 2f, 0f)
         GLES20.glUniform1f(pFocus, 0.4f)
+        GLES20.glUniform4f(pCrop, photoCrop[0], photoCrop[1], photoCrop[2], photoCrop[3])
         bindQuad(pPos, pUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
@@ -686,7 +679,7 @@ class VrRenderer(
             surfaceTexture?.updateTexImage()
             surfaceTexture?.getTransformMatrix(stMatrix)
         }
-        photoAspect = c[2] * srcW / (c[3] * srcH)
+        photoCrop = c.copyOf()
         // 照片本身:最長邊不超過 2048(與手機上看得到的清晰度相當)
         var pw = (c[2] * srcW).toInt()
         var ph = (c[3] * srcH).toInt()

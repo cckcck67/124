@@ -52,6 +52,8 @@ android {
 dependencies {
     // 立體照:在手機上跑深度估計模型
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // 網頁不附上 App 名稱標頭(X-Requested-With)
+    implementation("androidx.webkit:webkit:1.8.0")
     // 只用在啟動測試(不會打包進 App)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")

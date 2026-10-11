@@ -19,6 +19,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -28,8 +30,28 @@ import org.json.JSONObject
  */
 class WebPresentation(
     outer: Context, display: Display,
-    private val screenW: Int, private val screenH: Int   // 虛擬螢幕像素大小(依畫質)
+    private val screenW: Int, private val screenH: Int,  // 虛擬螢幕像素大小(依畫質)
+    private val uaMode: Int = UA_APP                     // 網站看到的瀏覽器身分(測試 YouTube VR 用)
 ) : Presentation(outer, display) {
+
+    companion object {
+        const val UA_APP = 0       // 原本的 App 內網頁(只拿掉 wv 標記)
+        const val UA_MOBILE = 1    // 偽裝成手機版 Chrome
+        const val UA_DESKTOP = 2   // 偽裝成電腦版 Chrome
+        val UA_NAMES = arrayOf("App", "手機", "電腦")
+
+        /** 依模式產生瀏覽器識別字串;Chrome 版本沿用 WebView 本身的版本 */
+        fun userAgent(base: String, mode: Int): String {
+            val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
+            return when (mode) {
+                UA_MOBILE -> "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                        "Chrome/$major.0.0.0 Mobile Safari/537.36"
+                UA_DESKTOP -> "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                        "Chrome/$major.0.0.0 Safari/537.36"
+                else -> base.replace("; wv", "")
+            }
+        }
+    }
 
     private var resumeSec = -1.0   // 重新載入後要跳回的播放位置(切換畫質用)
 
@@ -60,8 +82,14 @@ class WebPresentation(
             builtInZoomControls = true
             displayZoomControls = false
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
-            userAgentString = userAgentString.replace("; wv", "")
+            userAgentString = userAgent(userAgentString, uaMode)
         }
+        // 不在每次連線附上 App 名稱(X-Requested-With),網站較難認出是 App 內的網頁
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+                WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
+            }
+        } catch (e: Throwable) {}
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme ?: return true

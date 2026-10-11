@@ -204,10 +204,20 @@ class MainActivity : Activity(), SensorEventListener {
     // 測試用:在網頁最上層顯示影片原始畫面與 YouTube 標註的格式(VR 模式也用這個畫面)
     private lateinit var rawButton: Button
     private var rawOn = false
+    // 測試用:網站看到的瀏覽器身分(App / 手機版 Chrome / 電腦版 Chrome),切換後重新載入
+    private lateinit var uaButton: Button
+    private var uaMode = WebPresentation.UA_APP
 
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
         qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
+        uaMode = prefs.getInt("ua", WebPresentation.UA_APP).coerceIn(0, WebPresentation.UA_NAMES.size - 1)
+        uaButton = button("身分:" + WebPresentation.UA_NAMES[uaMode]) {
+            uaMode = (uaMode + 1) % WebPresentation.UA_NAMES.size
+            prefs.edit().putInt("ua", uaMode).apply()
+            uaButton.text = "身分:" + WebPresentation.UA_NAMES[uaMode]
+            recreateWeb()
+        }
         rawButton = button("原始:關") {
             rawOn = !rawOn
             rawButton.text = if (rawOn) "原始:開" else "原始:關"
@@ -236,6 +246,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("★") { showBookmarks() })
             addView(qualityButton)
             addView(rawButton)
+            addView(uaButton)
             addView(button("VR") { setVr(true) })
         }
 
@@ -311,7 +322,7 @@ class MainActivity : Activity(), SensorEventListener {
         },
         Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
-        Setting("photo", "立體照強度", 0.005f, 0f, 0.1f, "%.3f", { 0.03f }) { renderer.photoStrength = it },
+        Setting("photo2", "立體照強度", 0.005f, 0f, 0.12f, "%.3f", { 0.05f }) { renderer.photoStrength = it },
     ) }
 
     private val sphereSettings by lazy { listOf(
@@ -533,7 +544,7 @@ class MainActivity : Activity(), SensorEventListener {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         )
         virtualDisplay = vd
-        presentation = WebPresentation(this, vd.display, srcW, srcH).also {
+        presentation = WebPresentation(this, vd.display, srcW, srcH, uaMode).also {
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -549,8 +560,18 @@ class MainActivity : Activity(), SensorEventListener {
         prefs.edit().putInt("quality", q).apply()
         srcW = QUALITY_W[q]
         srcH = QUALITY_H[q]
-        val url = presentation?.currentUrl ?: HOME_URL
-        val at = if (menu.hasVideo) menu.current else -1.0
+        recreateWeb()
+    }
+
+    /** 重建虛擬螢幕與網頁(換畫質 / 瀏覽器身分),回到目前網頁與播放位置 */
+    private fun recreateWeb() {
+        val p = presentation ?: return recreateWeb(HOME_URL, -1.0)
+        // 先問網頁目前播放到哪裡,重新載入後跳回去
+        p.videoStatus { st -> recreateWeb(p.currentUrl ?: HOME_URL, st?.current ?: -1.0) }
+    }
+
+    private fun recreateWeb(url: String, at: Double) {
+        val q = quality
         presentation?.release()
         presentation?.dismiss()
         virtualDisplay?.release()
@@ -1027,7 +1048,7 @@ class MainActivity : Activity(), SensorEventListener {
                             if (!vrMode || renderer.mode != VrRenderer.MODE_2D) { hideMessage(); return@post }
                             glView.queueEvent { renderer.setDepth(d, w, h) }
                             menu.photo = true
-                            hideMessage()
+                            showMessage("立體照", "完成", 1500)
                             redrawPanel(force = true)
                         }
                     } catch (e: Throwable) {
