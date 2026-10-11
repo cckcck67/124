@@ -499,6 +499,7 @@ class MainActivity : Activity(), SensorEventListener {
         if (vrMode) setVr(false)
         when (screen) {
             SCREEN_WEB -> {
+                if (presentation?.vrPlayerOpen == true) closeYouTubeVr()
                 presentation?.pauseAll()
                 saveWebUrl()
             }
@@ -558,7 +559,10 @@ class MainActivity : Activity(), SensorEventListener {
     /** 網址列的「←」:網頁上一頁;空中遊覽回目的地選單;我的影片回清單 */
     private fun navBack() {
         when (screen) {
-            SCREEN_WEB -> if (presentation?.handleBack() != true) goHome()
+            SCREEN_WEB -> when {
+                presentation?.vrPlayerOpen == true -> closeYouTubeVr()   // 先關上層 VR 播放器
+                presentation?.handleBack() != true -> goHome()
+            }
             SCREEN_FLIGHT -> {
                 val p = presentation
                 if (p == null) goHome()
@@ -662,6 +666,7 @@ class MainActivity : Activity(), SensorEventListener {
     // YouTube 環顧:平面顯示的設定 + YouTube 視野
     private val ytSettings by lazy {
         flatSettings +
+            Setting("ytgain", "轉頭比例", 0.05f, 0.2f, 2f, "%.2f", { 1f }) { ytGain = it; lastYtYaw = 999f } +
             Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
     }
 
@@ -1047,10 +1052,8 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showHud = false
         hideKeyboard()
         hideSystemBars()
-        if (!on) presentation?.let { p ->
-            // YouTube 環顧時換成電腦版的,離開 VR 換回手機版排版
-            if (p.youTubeDesktop) p.videoStatus { st -> p.setYouTubeDesktop(false, st?.current ?: -1.0) }
-        }
+        // 離開 VR 時上層 VR 播放器留著(維持橫式),按返回才關掉
+        if (!on && presentation?.vrPlayerOpen == true) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         if (on) {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
@@ -1066,7 +1069,6 @@ class MainActivity : Activity(), SensorEventListener {
         val p = presentation ?: return
         // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
         if (screen == SCREEN_FLIGHT) {
-            ytHalf = false
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
             handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
             return
@@ -1074,6 +1076,7 @@ class MainActivity : Activity(), SensorEventListener {
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
         // 先在背景直接問 YouTube 這部影片的格式(最準);問不到再從網頁裡判斷
         val url = p.currentUrl
+        if (p.vrPlayerOpen) { applyYouTubeProjection(p, "VR"); return }   // 已經在 VR 播放器裡
         if (WebPresentation.isYouTube(url)) {
             youtubeProjection(url) { proj ->
                 if (proj != null) applyYouTubeProjection(p, proj)
@@ -1087,10 +1090,9 @@ class MainActivity : Activity(), SensorEventListener {
     /** 依 YouTube 影片格式選模式:VR 影片 → 環顧(換成電腦版播放器);一般影片 → 依比例判斷 */
     private fun applyYouTubeProjection(p: WebPresentation, proj: String) {
         val yt = proj.isNotEmpty()
-        ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
         if (yt) {
-            // 環顧要用電腦版播放器:切換身分並重新載入,回到原本的播放位置(離開 VR 再換回手機版)
-            if (!p.youTubeDesktop) p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
+            // 環顧用上層的 VR 播放器(官方嵌入播放器),原本的網頁留在下面不動
+            if (!p.vrPlayerOpen) openYouTubeVr(p)
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
         } else detectByAspect(p)
         // 告訴使用者偵測結果(等置中倒數結束再顯示)
@@ -1152,19 +1154,40 @@ class MainActivity : Activity(), SensorEventListener {
         if (on) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             val url = p?.currentUrl
-            if (p != null && screen == SCREEN_WEB && WebPresentation.isYouTube(url) && !p.youTubeDesktop) {
+            if (p != null && screen == SCREEN_WEB && WebPresentation.isYouTube(url) && !p.vrPlayerOpen) {
                 youtubeProjection(url) { proj ->
-                    if (!proj.isNullOrEmpty() && !vrMode) {
-                        ytHalf = proj == "MESH"
-                        p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
-                        toast("VR 影片:已換成可以轉頭的播放器,按 VR 即可環顧")
+                    if (!proj.isNullOrEmpty() && !vrMode && !p.vrPlayerOpen) {
+                        openYouTubeVr(p)
+                        toast("VR 影片:已開啟 VR 播放器,可手指拖動環顧、按 VR 轉頭環顧,按返回關閉")
                     }
                 }
             }
-        } else if (p?.youTubeDesktop != true) {
-            // 離開全螢幕就跟著手機方向(剛換成電腦版播放器時維持橫式,方便接著進 VR)
+        } else if (p?.vrPlayerOpen != true) {
+            // 離開全螢幕就跟著手機方向(開著 VR 播放器時維持橫式)
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         }
+    }
+
+    /**
+     * 開啟上層 VR 播放器:原本網頁的影片離開全螢幕並暫停,
+     * VR 播放器從同一個時間點接著播(轉成橫式)
+     */
+    private fun openYouTubeVr(p: WebPresentation) {
+        val id = youtubeId(p.currentUrl) ?: return
+        p.videoStatus { st ->
+            val t = st?.current ?: 0.0
+            p.exitFullscreen()
+            p.pauseAll()
+            p.openVrPlayer(id, t)
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+    }
+
+    /** 關掉上層 VR 播放器:原本網頁的影片跳到看到的時間點並暫停 */
+    private fun closeYouTubeVr() {
+        val p = presentation ?: return
+        p.closeVrPlayer { t -> p.seekAndPauseMain(t) }
+        if (!vrMode) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     }
 
     private fun detectByAspect(p: WebPresentation) {
@@ -1416,7 +1439,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 30 次,沒變就不送)
     private var ytFov = 100f
-    private var ytHalf = true          // VR180(只有前方半圈,左右要限制);360 影片不限制左右
+    private var ytGain = 1f            // 環顧的轉頭比例
     private var lastYtAt = 0L
     private var lastYtYaw = 999f
     private var lastYtPitch = 999f
@@ -1425,16 +1448,11 @@ class MainActivity : Activity(), SensorEventListener {
         val now = SystemClock.uptimeMillis()
         if (now - lastYtAt < 33) return
         // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
-        // 空中遊覽:轉頭比例(畫面跟著轉多少)
-        val gain = if (screen == SCREEN_FLIGHT) flyGain else 1f
-        var yaw = -Math.toDegrees(az.toDouble()).toFloat() * gain
-        var pitch = -Math.toDegrees(down.toDouble()).toFloat() * gain
-        // 轉到影片邊緣就停住(YouTube 超出範圍時會把畫面彈回來)。
-        // YouTube 的 fov 是垂直視野,水平視野依播放器比例(約 16:9)換算
-        val vHalf = ytFov / 2f
-        val hHalf = Math.toDegrees(kotlin.math.atan(kotlin.math.tan(Math.toRadians(vHalf.toDouble())) * 16.0 / 9.0)).toFloat()
-        if (ytHalf) yaw = yaw.coerceIn(-(90f - hHalf).coerceAtLeast(0f), (90f - hHalf).coerceAtLeast(0f))
-        pitch = pitch.coerceIn(-(90f - vHalf).coerceAtLeast(0f), (90f - vHalf).coerceAtLeast(0f))
+        // 轉頭比例(畫面跟著轉多少):空中遊覽、環顧各自設定
+        val gain = if (screen == SCREEN_FLIGHT) flyGain else ytGain
+        val yaw = -Math.toDegrees(az.toDouble()).toFloat() * gain
+        val pitch = (-Math.toDegrees(down.toDouble()).toFloat() * gain).coerceIn(-89f, 89f)
+        // 轉到影片邊緣的處理在 VR 播放器頁面裡:讀回 YouTube 實際的方向,停在它允許的邊界
         if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
         lastYtAt = now
         lastYtYaw = yaw

@@ -52,8 +52,8 @@ class WebPresentation(
         fun isFlight(url: String?) = url?.startsWith("$APP_ORIGIN/assets/flight.html") == true
 
         /**
-         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 平常用手機版 Chrome 的身分
-         * (正常的手機版排版);只有 VR 環顧時才切到電腦版(電腦版播放器才能用程式控制看的方向)
+         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 用手機版 Chrome 的身分
+         * (正常的手機版排版);VR 影片另外用上層的 VR 播放器(電腦版官方嵌入播放器)
          */
         fun isYouTube(url: String?): Boolean {
             val host = try { android.net.Uri.parse(url ?: return false).host ?: return false } catch (e: Exception) { return false }
@@ -86,24 +86,84 @@ class WebPresentation(
     }
 
     private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
-    private var mobileUa = ""    // YouTube 平常:手機版 Chrome
-    private var desktopUa = ""   // YouTube VR 環顧:電腦版 Chrome
+    private var mobileUa = ""    // YouTube:手機版 Chrome
+    private var desktopUa = ""   // 上層 VR 播放器:電腦版 Chrome(官方播放器才能用程式控制看的方向)
 
-    /** YouTube 用電腦版身分(VR 環顧時) */
-    var youTubeDesktop = false
-        private set
+    // ---------------- 上層 VR 播放器 ----------------
 
-    /** 切換 YouTube 的身分並重新載入目前網頁,回到原本的播放位置 */
-    fun setYouTubeDesktop(on: Boolean, resumeAt: Double) {
-        if (on == youTubeDesktop) return
-        youTubeDesktop = on
-        val url = currentUrl ?: return
-        if (isYouTube(url)) loadUrl(url, resumeAt)
+    /** 蓋在原本網頁上方的 VR 播放器(YouTube 官方嵌入播放器);原本的網頁留在下面不動 */
+    private var overlay: WebView? = null
+    val vrPlayerOpen get() = overlay != null
+
+    /** 面板、轉頭等操作的對象:有上層播放器時操作它,否則操作原本的網頁 */
+    private val active: WebView get() = overlay ?: webView
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun openVrPlayer(videoId: String, startSec: Double) {
+        if (!::root.isInitialized) return
+        val w = overlay ?: WebView(context).also { w ->
+            with(w.settings) {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                mediaPlaybackRequiresUserGesture = false
+                textZoom = 100
+                userAgentString = desktopUa
+            }
+            blockOrientation(w)
+            w.setBackgroundColor(Color.BLACK)
+            w.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val scheme = request.url.scheme ?: return true
+                    return scheme != "http" && scheme != "https"
+                }
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
+                    assetLoader.shouldInterceptRequest(request.url)
+            }
+            root.addView(w, pageParams())
+            overlay = w
+        }
+        w.loadUrl("$APP_ORIGIN/assets/ytvr.html?v=" + android.net.Uri.encode(videoId) + "&t=" + startSec)
+    }
+
+    /** 關掉上層播放器,回傳看到的時間點(秒;拿不到為 -1) */
+    fun closeVrPlayer(cb: (Double) -> Unit) {
+        val w = overlay ?: return cb(-1.0)
+        w.evaluateJavascript("(function(){$FIND_VIDEO return v?v.currentTime:-1;})()") { r ->
+            root.removeView(w)
+            w.destroy()
+            if (overlay === w) overlay = null
+            cb(r?.toDoubleOrNull() ?: -1.0)
+        }
+    }
+
+    /** 原本網頁的影片跳到某個時間點並暫停(關掉上層播放器後) */
+    fun seekAndPauseMain(sec: Double) {
+        if (!::webView.isInitialized) return
+        webView.evaluateJavascript("(function(){$FIND_VIDEO if(!v)return;" +
+                (if (sec >= 0) "v.currentTime=$sec;" else "") + "v.pause();})()", null)
+    }
+
+    /** 離開網頁影片的全螢幕 */
+    fun exitFullscreen() {
+        if (customView == null) return
+        val cb = customCallback
+        removeCustomView()
+        cb?.onCustomViewHidden()
+    }
+
+    /** 不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制) */
+    private fun blockOrientation(w: WebView) {
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(w, BLOCK_ORIENTATION,
+                    setOf("https://youtube.com", "https://*.youtube.com", "https://www.youtube-nocookie.com"))
+            }
+        } catch (e: Throwable) {}
     }
 
     /** 依要前往的網址切換身分;有改變回傳 true(之後的載入才會套用) */
     private fun applyUa(url: String?): Boolean {
-        val want = if (!isYouTube(url)) appUa else if (youTubeDesktop) desktopUa else mobileUa
+        val want = if (isYouTube(url)) mobileUa else appUa
         if (webView.settings.userAgentString == want) return false
         webView.settings.userAgentString = want
         return true
@@ -146,12 +206,7 @@ class WebPresentation(
             userAgentString = appUa
         }
         // YouTube:不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制)
-        try {
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(webView, BLOCK_ORIENTATION,
-                    setOf("https://youtube.com", "https://*.youtube.com"))
-            }
-        } catch (e: Throwable) {}
+        blockOrientation(webView)
         // 不在每次連線附上 App 名稱(X-Requested-With),網站較難認出是 App 內的網頁
         try {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
@@ -283,9 +338,10 @@ class WebPresentation(
 
     class VideoStatus(val current: Double, val duration: Double, val paused: Boolean)
 
+    /** 在目前操作的網頁(上層 VR 播放器或原本的網頁)執行程式 */
     private fun js(code: String, cb: ((String?) -> Unit)? = null) {
         if (!::webView.isInitialized) { cb?.invoke(null); return }
-        webView.evaluateJavascript(code) { cb?.invoke(it) }
+        active.evaluateJavascript(code) { cb?.invoke(it) }
     }
 
     /** 回傳 null = 找不到影片 */
@@ -348,7 +404,7 @@ class WebPresentation(
      * 空中遊覽頁面用 vrLook(向右為正, 向上為正);YouTube 用播放器的 setSphericalProperties。
      */
     fun lookAt(yaw: Float, pitch: Float, fov: Float) {
-        js("(function(){if(window.vrLook){vrLook(${-yaw},$pitch);return;}" +
+        js("(function(){if(window.vrLook){vrLook(${-yaw},$pitch,$fov);return;}" +
             "var mp=document.getElementById('movie_player');" +
             "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
             "pitch:$pitch,roll:0,fov:$fov});})()")
@@ -440,6 +496,8 @@ class WebPresentation(
     }
 
     fun release() {
+        overlay?.destroy()
+        overlay = null
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.destroy()
@@ -450,7 +508,8 @@ class WebPresentation(
 // 找出頁面上最主要的影片:正在播放的優先,其次面積最大的
 private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
-    "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
+    "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});" +
+    "if(!v&&window.vrMedia)v=window.vrMedia;"   // VR 播放器(官方嵌入播放器)
 
 // 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
 private const val BLOCK_ORIENTATION =
