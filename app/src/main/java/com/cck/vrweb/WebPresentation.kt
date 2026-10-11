@@ -20,6 +20,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,27 +31,33 @@ import org.json.JSONObject
  */
 class WebPresentation(
     outer: Context, display: Display,
-    private val screenW: Int, private val screenH: Int,  // 虛擬螢幕像素大小(依畫質)
-    private val uaMode: Int = UA_APP                     // 網站看到的瀏覽器身分(測試 YouTube VR 用)
+    private val screenW: Int, private val screenH: Int   // 虛擬螢幕像素大小(依畫質)
 ) : Presentation(outer, display) {
 
     companion object {
-        const val UA_APP = 0       // 原本的 App 內網頁(只拿掉 wv 標記)
-        const val UA_MOBILE = 1    // 偽裝成手機版 Chrome
-        const val UA_DESKTOP = 2   // 偽裝成電腦版 Chrome
-        val UA_NAMES = arrayOf("App", "手機", "電腦")
-
-        /** 依模式產生瀏覽器識別字串;Chrome 版本沿用 WebView 本身的版本 */
-        fun userAgent(base: String, mode: Int): String {
-            val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
-            return when (mode) {
-                UA_MOBILE -> "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                        "Chrome/$major.0.0.0 Mobile Safari/537.36"
-                UA_DESKTOP -> "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                        "Chrome/$major.0.0.0 Safari/537.36"
-                else -> base.replace("; wv", "")
-            }
+        /** YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用手機版 Chrome 的身分 */
+        fun isYouTube(url: String?): Boolean {
+            val host = try { android.net.Uri.parse(url ?: return false).host ?: return false } catch (e: Exception) { return false }
+            return host == "youtu.be" || host == "youtube.com" || host.endsWith(".youtube.com")
         }
+
+        /** 手機版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
+        fun chromeUserAgent(base: String): String {
+            val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
+            return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/$major.0.0.0 Mobile Safari/537.36"
+        }
+    }
+
+    private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
+    private var chromeUa = ""    // YouTube:手機版 Chrome
+
+    /** 依要前往的網址切換身分;有改變回傳 true(之後的載入才會套用) */
+    private fun applyUa(url: String?): Boolean {
+        val want = if (isYouTube(url)) chromeUa else appUa
+        if (webView.settings.userAgentString == want) return false
+        webView.settings.userAgentString = want
+        return true
     }
 
     private var resumeSec = -1.0   // 重新載入後要跳回的播放位置(切換畫質用)
@@ -82,8 +89,17 @@ class WebPresentation(
             builtInZoomControls = true
             displayZoomControls = false
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
-            userAgentString = userAgent(userAgentString, uaMode)
+            appUa = userAgentString.replace("; wv", "")
+            chromeUa = chromeUserAgent(userAgentString)
+            userAgentString = appUa
         }
+        // YouTube:不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制)
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(webView, BLOCK_ORIENTATION,
+                    setOf("https://youtube.com", "https://*.youtube.com"))
+            }
+        } catch (e: Throwable) {}
         // 不在每次連線附上 App 名稱(X-Requested-With),網站較難認出是 App 內的網頁
         try {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
@@ -93,7 +109,13 @@ class WebPresentation(
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme ?: return true
-                return scheme != "http" && scheme != "https" // 擋掉 intent:// 等跳 App 的連結
+                if (scheme != "http" && scheme != "https") return true  // 擋掉 intent:// 等跳 App 的連結
+                // 進出 YouTube 時換身分,用新身分重新載入
+                if (request.isForMainFrame && applyUa(request.url.toString())) {
+                    view.loadUrl(request.url.toString())
+                    return true
+                }
+                return false
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -127,7 +149,7 @@ class WebPresentation(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
 
-        pendingUrl?.let { webView.loadUrl(it) }
+        pendingUrl?.let { applyUa(it); webView.loadUrl(it) }
         pendingUrl = null
     }
 
@@ -144,7 +166,7 @@ class WebPresentation(
     }
 
     fun loadUrl(url: String) {
-        if (::webView.isInitialized) webView.loadUrl(url) else pendingUrl = url
+        if (::webView.isInitialized) { applyUa(url); webView.loadUrl(url) } else pendingUrl = url
     }
 
     val currentTitle: String?
@@ -236,39 +258,21 @@ class WebPresentation(
         }
     }
 
-    /**
-     * 測試用「原始畫面」:YouTube 的 360 / VR180 播放器會自己把影片轉成跟著手機轉的單眼畫面,
-     * 這裡在最上層直接畫出 <video> 的原始畫面,並在左上角顯示 YouTube 標註的投影格式。
-     * 重複呼叫不會重複建立;on = false 移除。
-     */
-    fun showRaw(on: Boolean) {
-        js("(function(on){$FIND_VIDEO_FN var c=document.getElementById('__vrraw');" +
-            "if(!on){if(window.__vrRawStop)window.__vrRawStop();return;}if(c)return;" +
-            "c=document.createElement('canvas');c.id='__vrraw';" +
-            "c.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:2147483647;background:#000;pointer-events:none';" +
-            "document.documentElement.appendChild(c);var run=true,lines=[],last=0;" +
-            "window.__vrRawStop=function(){run=false;c.remove();window.__vrRawStop=null;};" +
-            "function info(v){var s=['video '+v.videoWidth+'x'+v.videoHeight];try{" +
-            "var mp=document.getElementById('movie_player');if(mp&&mp.getPlayerResponse){" +
-            "var pr=mp.getPlayerResponse()||{},st=mp.getVideoStats?mp.getVideoStats():{};" +
-            "var fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],cur=null,p={};" +
-            "fs.forEach(function(f){if(String(f.itag)===String(st.fmt))cur=f;" +
-            "if(f.projectionType)p[f.projectionType+'/'+(f.stereoLayout||'-')]=1;});" +
-            "if(cur)s.push('playing itag '+cur.itag+' '+String(cur.mimeType||'').split(';')[0]+' '+cur.width+'x'+cur.height+" +
-            "' proj='+cur.projectionType+' stereo='+(cur.stereoLayout||'-'));" +
-            "s.push('formats: '+Object.keys(p).join(', '));" +
-            "if(mp.getSphericalProperties)s.push('spherical '+JSON.stringify(mp.getSphericalProperties()));}" +
-            "}catch(e){s.push('err '+e);}return s;}" +
-            "function draw(t){if(!run)return;requestAnimationFrame(draw);var v=findVideo();" +
-            "var d=window.devicePixelRatio||1,W=Math.round(innerWidth*d),H=Math.round(innerHeight*d);" +
-            "if(c.width!==W||c.height!==H){c.width=W;c.height=H;}var g=c.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,W,H);" +
-            "if(!v||!v.videoWidth){c.__r=null;g.fillStyle='#ff0';g.font=(16*d)+'px sans-serif';g.fillText('找不到影片',10*d,24*d);return;}" +
-            "var a=v.videoWidth/v.videoHeight,w=W,h=W/a;if(h>H){h=H;w=H*a;}var x=(W-w)/2,y=(H-h)/2;" +
-            "try{g.drawImage(v,x,y,w,h);}catch(e){}c.__r=[x/W,y/H,w/W,h/H];" +
-            "if(t-last>1000){last=t;lines=info(v);}g.font=(13*d)+'px sans-serif';" +
-            "lines.forEach(function(l,i){var ty=(16+i*17)*d;g.fillStyle='rgba(0,0,0,0.6)';" +
-            "g.fillRect(4*d,ty-13*d,g.measureText(l).width+8*d,17*d);g.fillStyle='#ff0';g.fillText(l,8*d,ty);});}" +
-            "requestAnimationFrame(draw);})($on)")
+    /** YouTube 的 360 / VR180 影片(網頁版只有單眼,可以控制看的方向) */
+    fun youtubeSpherical(cb: (Boolean) -> Unit) {
+        js("(function(){var mp=document.getElementById('movie_player');" +
+            "if(!mp||!mp.getPlayerResponse||!mp.setSphericalProperties)return false;" +
+            "var pr=mp.getPlayerResponse()||{},fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[];" +
+            "return fs.some(function(f){return f.projectionType&&f.projectionType!=='RECTANGULAR';});})()") {
+            cb(it == "true")
+        }
+    }
+
+    /** YouTube VR 影片看的方向(度):yaw 向右為正、pitch 向上為正,fov = 視野 */
+    fun youtubeLook(yaw: Float, pitch: Float, fov: Float) {
+        js("(function(){var mp=document.getElementById('movie_player');" +
+            "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
+            "pitch:$pitch,roll:0,fov:$fov});})()")
     }
 
     fun pause() {
@@ -280,7 +284,7 @@ class WebPresentation(
      * player = true 時取 YouTube 播放器整塊。
      */
     fun videoRect(player: Boolean, cb: (FloatArray?) -> Unit) {
-        js("(function(pl){var rc=document.getElementById('__vrraw');if(rc&&rc.__r)return rc.__r;var e=null;" +
+        js("(function(pl){var e=null;" +
                 "if(pl){e=document.getElementById('movie_player')||document.querySelector('.html5-video-player');}" +
                 "if(!e){$FIND_VIDEO e=v;}" +
                 "if(!e)return null;var r=e.getBoundingClientRect(),W=window.innerWidth,H=window.innerHeight;" +
@@ -373,8 +377,10 @@ private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
     "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
 
-// 同上,包成函式(給一直重複執行的程式用)
-private const val FIND_VIDEO_FN = "function findVideo(){$FIND_VIDEO return v;}"
+// 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
+private const val BLOCK_ORIENTATION =
+    "['deviceorientation','deviceorientationabsolute','devicemotion'].forEach(function(t){" +
+    "window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
 
 // 拿掉網頁「禁止縮放」的設定(user-scalable=no、maximum-scale=1)
 private const val ALLOW_ZOOM =

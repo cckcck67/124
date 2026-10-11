@@ -35,6 +35,7 @@ class VrRenderer(
         const val MODE_SBS = 1       // 左右3D(平面)
         const val MODE_VR180 = 2     // 左右3D 半球影片(左半給左眼)
         const val MODE_TB360 = 3     // 上下3D 全景影片(上半給左眼,每半是 360 度攤平圖)
+        const val MODE_YT = 4        // YouTube 環顧:YouTube 依頭的方向轉好單眼畫面,兩眼看同一張
 
         /** 需要依頭部方向顯示的球面模式 */
         fun isSphere(m: Int) = m == MODE_VR180 || m == MODE_TB360
@@ -154,11 +155,16 @@ class VrRenderer(
             uniform vec2 uShift;
             uniform float uFocus;
             uniform vec4 uCrop;     // 照片在網頁畫面中的位置(x, y, 寬, 高),畫面其他部分照常顯示網頁
+            uniform float uShowDepth;   // 1 = 直接顯示深度圖(越白越近),檢查模型結果用
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv - 0.5;
                 vec2 uv = (0.5 + c * (1.0 + uK * dot(c, c)) - uCrop.xy) / uCrop.zw;
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
+                if (uShowDepth > 0.5) {
+                    gl_FragColor = vec4(vec3(texture2D(uDepth, uv).r), 1.0);
+                    return;
+                }
                 vec2 hit = clamp(uv + uShift * uFocus, 0.0, 1.0);   // 都沒找到 = 最遠的背景
                 for (int i = 0; i <= 32; i++) {
                     float t = 1.0 - float(i) / 32.0;              // 深度層:1 = 最近
@@ -241,6 +247,7 @@ class VrRenderer(
 
     // ---- 立體照(暫停畫面 + 深度圖) ----
     @Volatile var photoOn = false
+    @Volatile var photoShowDepth = false  // 顯示深度圖(檢查用)
     @Volatile var photoStrength = 0.05f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
     private var photoTex = 0
     private var depthTex = 0
@@ -278,7 +285,7 @@ class VrRenderer(
     private lateinit var blitProg: Prog
     private var photoProg = 0
     private var pPos = 0; private var pUv = 0; private var pTex = 0; private var pDepth = 0
-    private var pK = 0; private var pTilt = 0; private var pShift = 0; private var pFocus = 0; private var pCrop = 0
+    private var pK = 0; private var pTilt = 0; private var pShift = 0; private var pFocus = 0; private var pCrop = 0; private var pShowDepth = 0
 
     // Mipmap 用的複製材質
     private var mipSupported = false
@@ -371,6 +378,7 @@ class VrRenderer(
         pShift = GLES20.glGetUniformLocation(photoProg, "uShift")
         pFocus = GLES20.glGetUniformLocation(photoProg, "uFocus")
         pCrop = GLES20.glGetUniformLocation(photoProg, "uCrop")
+        pShowDepth = GLES20.glGetUniformLocation(photoProg, "uShowDepth")
         // GL 環境重建後舊的材質都沒了,立體照要重拍
         photoTex = 0; depthTex = 0; photoFbo = 0; smallTex = 0; smallFbo = 0
         photoOn = false
@@ -625,6 +633,7 @@ class VrRenderer(
         GLES20.glUniform2f(pShift, -side * photoStrength / 2f, 0f)
         GLES20.glUniform1f(pFocus, 0.4f)
         GLES20.glUniform4f(pCrop, photoCrop[0], photoCrop[1], photoCrop[2], photoCrop[3])
+        GLES20.glUniform1f(pShowDepth, if (photoShowDepth) 1f else 0f)
         bindQuad(pPos, pUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }

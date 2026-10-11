@@ -201,28 +201,10 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 介面 ----------------
 
     private lateinit var qualityButton: Button
-    // 測試用:在網頁最上層顯示影片原始畫面與 YouTube 標註的格式(VR 模式也用這個畫面)
-    private lateinit var rawButton: Button
-    private var rawOn = false
-    // 測試用:網站看到的瀏覽器身分(App / 手機版 Chrome / 電腦版 Chrome),切換後重新載入
-    private lateinit var uaButton: Button
-    private var uaMode = WebPresentation.UA_APP
 
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
         qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
-        uaMode = prefs.getInt("ua", WebPresentation.UA_APP).coerceIn(0, WebPresentation.UA_NAMES.size - 1)
-        uaButton = button("身分:" + WebPresentation.UA_NAMES[uaMode]) {
-            uaMode = (uaMode + 1) % WebPresentation.UA_NAMES.size
-            prefs.edit().putInt("ua", uaMode).apply()
-            uaButton.text = "身分:" + WebPresentation.UA_NAMES[uaMode]
-            recreateWeb()
-        }
-        rawButton = button("原始:關") {
-            rawOn = !rawOn
-            rawButton.text = if (rawOn) "原始:開" else "原始:關"
-            presentation?.showRaw(rawOn)
-        }
 
         urlInput = EditText(this).apply {
             setSingleLine()
@@ -245,8 +227,6 @@ class MainActivity : Activity(), SensorEventListener {
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("★") { showBookmarks() })
             addView(qualityButton)
-            addView(rawButton)
-            addView(uaButton)
             addView(button("VR") { setVr(true) })
         }
 
@@ -336,7 +316,17 @@ class MainActivity : Activity(), SensorEventListener {
     private val speeds = floatArrayOf(0.5f, 1f, 1.5f)
     private var speedIndex = 1
 
-    private fun modeSettings(m: Int) = if (VrRenderer.isSphere(m)) sphereSettings else flatSettings
+    // YouTube 環顧:平面顯示的設定 + YouTube 視野(立體照不適用)
+    private val ytSettings by lazy {
+        flatSettings.filter { it.key != "photo2" } +
+            Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
+    }
+
+    private fun modeSettings(m: Int) = when {
+        VrRenderer.isSphere(m) -> sphereSettings
+        m == VrRenderer.MODE_YT -> ytSettings
+        else -> flatSettings
+    }
 
     private fun settingValue(m: Int, st: Setting) = prefs.getFloat("m${m}_${st.key}", st.def(m))
 
@@ -544,7 +534,7 @@ class MainActivity : Activity(), SensorEventListener {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         )
         virtualDisplay = vd
-        presentation = WebPresentation(this, vd.display, srcW, srcH, uaMode).also {
+        presentation = WebPresentation(this, vd.display, srcW, srcH).also {
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -590,7 +580,6 @@ class MainActivity : Activity(), SensorEventListener {
             if (!ticking) return
             val p = presentation
             if (p != null) {
-                if (rawOn) p.showRaw(true)   // 換頁後重新加上(已存在就不動)
                 if (!vrMode) {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
@@ -603,7 +592,8 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (renderer.vrMode && renderer.mode != VrRenderer.MODE_2D) {
                     // 找出影片在網頁中的位置,VR 畫面只取影片本身
-                    p.videoRect(false) { r ->
+                    // YouTube 環顧:取整個播放器(畫面由 YouTube 自己轉好)
+                    p.videoRect(renderer.mode == VrRenderer.MODE_YT) { r ->
                         renderer.crop = toCrop(r)
                         redraw()
                     }
@@ -650,13 +640,22 @@ class MainActivity : Activity(), SensorEventListener {
      * 其他比例若原本是球面模式就回到 2D,否則維持(2D / 左右3D 看不出來)。猜錯可用面板「模式」改。
      */
     private fun autoDetectMode() {
-        presentation?.videoSize { w, h ->
+        val p = presentation ?: return
+        // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
+        p.youtubeSpherical { yt ->
+            if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
+            else detectByAspect(p)
+        }
+    }
+
+    private fun detectByAspect(p: WebPresentation) {
+        p.videoSize { w, h ->
             if (w <= 0 || h <= 0) return@videoSize
             val r = w.toFloat() / h
             val m = when {
                 r in 1.85f..2.15f -> VrRenderer.MODE_VR180
                 r in 0.9f..1.1f -> VrRenderer.MODE_TB360
-                VrRenderer.isSphere(renderer.mode) -> VrRenderer.MODE_2D
+                VrRenderer.isSphere(renderer.mode) || renderer.mode == VrRenderer.MODE_YT -> VrRenderer.MODE_2D
                 else -> renderer.mode
             }
             if (m != renderer.mode) setMode(m)
@@ -865,6 +864,7 @@ class MainActivity : Activity(), SensorEventListener {
         val az = sensorAz
         val down = sensorDown
         lastAz = az
+        if (renderer.mode == VrRenderer.MODE_YT) youtubeLook(az, down)
 
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
         val lying = VrMenu.lying
@@ -893,6 +893,24 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorY += (ty - renderer.cursorY) * k
         updateMenu(now)
         redraw()
+    }
+
+    // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 60 次,沒變就不送)
+    private var ytFov = 100f
+    private var lastYtAt = 0L
+    private var lastYtYaw = 999f
+    private var lastYtPitch = 999f
+
+    private fun youtubeLook(az: Float, down: Float) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastYtAt < 16) return
+        val yaw = Math.toDegrees(az.toDouble()).toFloat()
+        val pitch = -Math.toDegrees(down.toDouble()).toFloat()
+        if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
+        lastYtAt = now
+        lastYtYaw = yaw
+        lastYtPitch = pitch
+        presentation?.youtubeLook(yaw, pitch, ytFov)
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
@@ -1012,7 +1030,16 @@ class MainActivity : Activity(), SensorEventListener {
 
     /** 面板「立體照」:暫停影片 → 拍下畫面 → 手機上算深度 → 兩眼依深度錯開,變成立體 */
     private fun startPhoto() {
-        if (renderer.photoOn) { stopPhoto(); return }
+        // 再按一次:立體照 → 深度圖(檢查模型算出的遠近,越白越近)→ 退出
+        if (renderer.photoOn) {
+            if (!renderer.photoShowDepth) {
+                renderer.photoShowDepth = true
+                menu.photo = 2
+                redrawPanel(force = true)
+                redraw()
+            } else stopPhoto()
+            return
+        }
         if (photoBusy) return
         if (renderer.mode != VrRenderer.MODE_2D) {
             showMessage("請先切到", "2D 模式", 2500)
@@ -1047,7 +1074,8 @@ class MainActivity : Activity(), SensorEventListener {
                             // 算好前已離開 VR 或換了模式就不顯示
                             if (!vrMode || renderer.mode != VrRenderer.MODE_2D) { hideMessage(); return@post }
                             glView.queueEvent { renderer.setDepth(d, w, h) }
-                            menu.photo = true
+                            renderer.photoShowDepth = false
+                            menu.photo = 1
                             showMessage("立體照", "完成", 1500)
                             redrawPanel(force = true)
                         }
@@ -1066,9 +1094,10 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun stopPhoto() {
-        if (!renderer.photoOn && !menu.photo) return
+        if (!renderer.photoOn && menu.photo == 0) return
         renderer.photoOn = false
-        menu.photo = false
+        renderer.photoShowDepth = false
+        menu.photo = 0
         redrawPanel(force = true)
         redraw()
     }
