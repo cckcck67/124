@@ -61,6 +61,7 @@ jobs:
 
             版本 1.${{ github.run_number }}(${{ github.sha }})
           prerelease: false
+          make_latest: true   # 首頁顯示為最新版本(定版保存的 v1.0 等不搶這個位置)
           files: |
             VrWebPlayer.apk
             version.json

@@ -14,8 +14,9 @@ on:
 permissions:
   contents: write
 
+# 和 build.yml 分開排隊(各自只改動自己的 Release),避免互相取消
 concurrency:
-  group: release
+  group: release-tag
   cancel-in-progress: false
 
 jobs:
