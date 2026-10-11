@@ -20,6 +20,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONArray
@@ -35,6 +36,11 @@ class WebPresentation(
 ) : Presentation(outer, display) {
 
     companion object {
+        const val APP_ORIGIN = "https://appassets.androidplatform.net"
+
+        /** App 內建的空中遊覽頁面 */
+        fun isFlight(url: String?) = url?.startsWith("$APP_ORIGIN/assets/flight.html") == true
+
         /**
          * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用電腦版 Chrome 的身分
          * (電腦版播放器才能用程式控制 VR 影片看的方向)
@@ -50,6 +56,16 @@ class WebPresentation(
             return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
                     "Chrome/$major.0.0.0 Safari/537.36"
         }
+    }
+
+    /** App 內建頁面(首頁、空中遊覽)要用的 Google 金鑰;由 MainActivity 提供 */
+    var appKey: () -> String = { "" }
+    /** App 內建頁面的指令(網址 vrweb://指令),例如 vrweb://key = 設定金鑰 */
+    var onAppCommand: (String) -> Unit = {}
+
+    // 內建頁面用 https://appassets.androidplatform.net/assets/… 提供(金鑰可限定只給這個網址用)
+    private val assetLoader by lazy {
+        WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context)).build()
     }
 
     private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
@@ -112,6 +128,7 @@ class WebPresentation(
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme ?: return true
+                if (scheme == "vrweb") { onAppCommand(request.url.host ?: ""); return true }
                 if (scheme != "http" && scheme != "https") return true  // 擋掉 intent:// 等跳 App 的連結
                 // 進出 YouTube 時換身分,用新身分重新載入
                 if (request.isForMainFrame && applyUa(request.url.toString())) {
@@ -121,7 +138,14 @@ class WebPresentation(
                 return false
             }
 
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
+                assetLoader.shouldInterceptRequest(request.url)
+
             override fun onPageFinished(view: WebView, url: String?) {
+                // 內建頁面:把金鑰交給網頁(只給 App 自己的頁面)
+                if (url?.startsWith(APP_ORIGIN) == true) {
+                    view.evaluateJavascript("window.vrSetKey&&vrSetKey(${JSONObject.quote(appKey())})", null)
+                }
                 // 有些網站禁止縮放,把限制拿掉,讓雙指可以放大縮小
                 view.evaluateJavascript(ALLOW_ZOOM, null)
                 // 切換畫質後重新載入:等影片出現,跳回原本的位置繼續播
@@ -170,6 +194,10 @@ class WebPresentation(
 
     fun loadUrl(url: String) {
         if (::webView.isInitialized) { applyUa(url); webView.loadUrl(url) } else pendingUrl = url
+    }
+
+    fun reload() {
+        if (::webView.isInitialized) webView.reload()
     }
 
     val currentTitle: String?
@@ -273,9 +301,13 @@ class WebPresentation(
         }
     }
 
-    /** YouTube VR 影片看的方向(度):yaw、pitch 向上為正,fov = 視野 */
-    fun youtubeLook(yaw: Float, pitch: Float, fov: Float) {
-        js("(function(){var mp=document.getElementById('movie_player');" +
+    /**
+     * 環顧模式看的方向(度):yaw 為 YouTube 的方向(頭右轉 = 減少)、pitch 向上為正,fov = 視野。
+     * 空中遊覽頁面用 vrLook(向右為正, 向上為正);YouTube 用播放器的 setSphericalProperties。
+     */
+    fun lookAt(yaw: Float, pitch: Float, fov: Float) {
+        js("(function(){if(window.vrLook){vrLook(${-yaw},$pitch);return;}" +
+            "var mp=document.getElementById('movie_player');" +
             "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
             "pitch:$pitch,roll:0,fov:$fov});})()")
     }

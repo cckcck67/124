@@ -32,7 +32,7 @@ jobs:
       - name: Rename APK and write version info
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
-          echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"1.${{ github.run_number }}\"}" > version.json
+          echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"2.0.${{ github.run_number }}\"}" > version.json
           cat version.json
       - name: Remove files no longer published
         env:
@@ -42,10 +42,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: VR網頁播放器 1.${{ github.run_number }}
+          name: VR網頁播放器 2.0.${{ github.run_number }}(研究版)
           body: |
             ## VR網頁播放器(Android)
             把任何網頁影片放進手機 VR 盒子觀看的瀏覽器。
+
+            **這是 2.0 研究版**(持續更新中)。穩定的自用版本請看 Releases 中的「v1.0」。
 
             **下載安裝**:用手機瀏覽器下載下方的 `VrWebPlayer.apk`,點開安裝(第一次要允許「安裝未知應用程式」)。
             已安裝的 App 會自動檢查新版,按「更新」即可,書籤和設定都會保留。
@@ -53,13 +55,14 @@ jobs:
             **主要功能**
             - 2D 網頁瀏覽:書籤、首頁、畫質(1080p / 1440p / 4K)、雙指縮放、網頁文字框輸入
             - VR 模式:2D、左右3D、VR180、上下VR,依影片比例自動選擇
-            - YouTube 360 / VR180:自動切到「YT環顧」,轉頭控制看的方向(網頁版只有單眼)
+            - YouTube 360 / VR180:自動切到「環顧」,轉頭控制看的方向(網頁版只有單眼)
+            - 2.0 試作:空中遊覽(Google 3D 地圖,需要自己的 Google 金鑰)
             - 低頭(躺平時抬頭)叫出控制面板,看著按鈕就能操作:進度條、音量、快進、模式、置中、設定
             - 坐姿 / 躺平、置中倒數、每個模式各自記住的設定
 
             詳細說明請看專案首頁的 README。
 
-            版本 1.${{ github.run_number }}(${{ github.sha }})
+            版本 2.0.${{ github.run_number }}(${{ github.sha }})
           prerelease: false
           make_latest: true   # 首頁顯示為最新版本(定版保存的 v1.0 等不搶這個位置)
           files: |
