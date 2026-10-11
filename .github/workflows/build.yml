@@ -28,6 +28,10 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
           echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"1.${{ github.run_number }}\"}" > version.json
           cat version.json
+      - name: Remove files no longer published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete-asset latest depth.onnx -y -R ${{ github.repository }} || true
       - name: Publish to Releases (latest)
         uses: softprops/action-gh-release@v2
         with:
