@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
 
+# 同一時間只跑一個編譯,避免兩次發佈同時改動 Release 的檔案
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
