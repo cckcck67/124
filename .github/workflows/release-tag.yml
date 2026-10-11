@@ -43,7 +43,7 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          name: VR網頁播放器 ${{ env.TAG }}(自用完整版)
+          name: VR網頁播放器 ${{ env.TAG }}
           body_path: docs/releases/${{ env.TAG }}.md
           prerelease: false
           make_latest: false
