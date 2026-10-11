@@ -25,6 +25,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Check built-in pages (HTML structure and script syntax)
+        run: python3 tools/check_pages.py
       - name: Startup test (must pass before publishing)
         run: gradle testDebugUnitTest -PbuildNumber=${{ github.run_number }}
       - name: Build debug APK
