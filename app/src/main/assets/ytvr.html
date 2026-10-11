@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VR 播放器</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #p { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+  #msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #fd4; font: 4vmin sans-serif; text-align: center; padding: 0 5vw; }
+</style>
+</head>
+<body>
+<div id="p"></div>
+<div id="msg"></div>
+<script>
+// YouTube 官方嵌入播放器(VR 播放器):蓋在原本的手機版網頁上方,
+// 用官方的 setSphericalProperties 控制 360 / VR180 影片看的方向
+var q = new URLSearchParams(location.search);
+var vid = q.get('v') || '';
+var start = parseFloat(q.get('t') || '0') || 0;
+var P = null, ready = false;
+
+function showMsg(t) {
+  var m = document.getElementById('msg');
+  m.textContent = t;
+  m.style.display = 'flex';
+}
+
+// 讓 App 的面板(播放 / 暫停、進度條、快進、速度)可以像操作一般 <video> 一樣操作這個播放器
+window.vrMedia = {
+  tagName: 'DIV',
+  readyState: 4,
+  videoWidth: 1920,
+  videoHeight: 1080,
+  get currentTime() { return ready ? P.getCurrentTime() : start; },
+  set currentTime(t) { if (ready) P.seekTo(t, true); },
+  get duration() { return ready ? P.getDuration() : 0; },
+  get paused() { if (!ready) return true; var s = P.getPlayerState(); return s !== 1 && s !== 3; },
+  play: function () { if (ready) P.playVideo(); },
+  pause: function () { if (ready) P.pauseVideo(); },
+  get playbackRate() { return ready ? P.getPlaybackRate() : 1; },
+  set playbackRate(r) { if (ready) P.setPlaybackRate(r); },
+  get offsetWidth() { return innerWidth; },
+  get offsetHeight() { return innerHeight; },
+  getBoundingClientRect: function () { return document.getElementById('p').getBoundingClientRect(); }
+};
+
+// 轉頭控制看的方向。YouTube 能轉的範圍依影片而不同,所以不用猜:
+// 每次設定後讀回實際方向,被彈回原點或卡在邊緣,就把那裡記成邊界,之後停在邊界不再超過
+var lim = { lo: -180, hi: 180, plo: -90, phi: 90 };
+var pend = null, okY = 0, okP = 0, missY = 0, lastAy = 0;
+function signed(a) { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function setLimY(req, v) { if (req > 0) lim.hi = Math.max(0, v); else lim.lo = Math.min(0, v); }
+function setLimP(req, v) { if (req > 0) lim.phi = Math.max(0, v); else lim.plo = Math.min(0, v); }
+
+// right = 向右轉幾度、up = 向上幾度、fov = 視野
+window.vrLook = function (right, up, fov) {
+  if (!ready || !P.setSphericalProperties) return;
+  if (pend && P.getSphericalProperties) {
+    var s = P.getSphericalProperties() || {};
+    if (typeof s.yaw === 'number') {
+      var ay = signed(s.yaw);
+      if (Math.abs(ay - pend.y) <= 4) { okY = pend.y; missY = 0; }
+      else if (Math.abs(ay) < 2 && Math.abs(pend.y) > 8) { setLimY(pend.y, okY); missY = 0; }   // 被彈回原點
+      else if (++missY >= 3 && Math.abs(ay - lastAy) < 1.5) { setLimY(pend.y, ay); missY = 0; } // 卡在邊緣
+      lastAy = ay;
+    }
+    if (typeof s.pitch === 'number') {
+      if (Math.abs(s.pitch - pend.p) <= 4) okP = pend.p;
+      else if (Math.abs(s.pitch) < 2 && Math.abs(pend.p) > 8) setLimP(pend.p, okP);
+    }
+  }
+  var y = clamp(-right, lim.lo, lim.hi);   // YouTube 的 yaw:頭往右轉 = 數值減少
+  var p = clamp(up, lim.plo, lim.phi);
+  var o = { yaw: (y + 360) % 360, pitch: p, roll: 0 };
+  if (fov) o.fov = fov;
+  P.setSphericalProperties(o);
+  pend = { y: y, p: p };
+};
+
+window.onYouTubeIframeAPIReady = function () {
+  P = new YT.Player('p', {
+    videoId: vid,
+    playerVars: { autoplay: 1, playsinline: 1, rel: 0, fs: 0, start: Math.floor(start) },
+    events: {
+      onReady: function () {
+        ready = true;
+        if (start > 0) P.seekTo(start, true);
+        P.playVideo();
+      },
+      onError: function (e) {
+        // 上傳者禁止嵌入:改開電腦版的完整 YouTube 頁面(一樣蓋在上層)
+        if (e.data === 101 || e.data === 150 || e.data === 153) {
+          location.replace('https://www.youtube.com/watch?v=' + encodeURIComponent(vid) + '&t=' + Math.floor(start) + 's');
+        } else {
+          showMsg('無法播放這部影片(錯誤代碼 ' + e.data + ')');
+        }
+      }
+    }
+  });
+};
+
+if (!vid) showMsg('找不到影片編號');
+else {
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = function () { showMsg('無法連線到 YouTube'); };
+  document.head.appendChild(s);
+}
+</script>
+</body>
+</html>
