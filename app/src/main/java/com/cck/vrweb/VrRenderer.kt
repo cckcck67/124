@@ -139,45 +139,6 @@ class VrRenderer(
             }
         """
 
-        // 立體照:依深度圖把畫面左右錯開(每隻眼睛方向相反),近的東西錯開多、遠的少
-        // uShift = 每單位深度的位移,uFocus = 不位移的深度(螢幕平面)
-        // 由近到遠逐層找「位移後蓋住這個點」的第一個表面:前面的東西擋住後面的,
-        // 邊緣不會出現重複或被切開的影像,露出的背景用旁邊的背景補
-        private const val PHOTO_FS = """
-            #ifdef GL_FRAGMENT_PRECISION_HIGH
-            precision highp float;
-            #else
-            precision mediump float;
-            #endif
-            uniform sampler2D uTex;
-            uniform sampler2D uDepth;
-            uniform float uK;
-            uniform vec2 uShift;
-            uniform float uFocus;
-            uniform vec4 uCrop;     // 照片在網頁畫面中的位置(x, y, 寬, 高),畫面其他部分照常顯示網頁
-            uniform float uShowDepth;   // 1 = 直接顯示深度圖(越白越近),檢查模型結果用
-            varying vec2 vUv;
-            void main() {
-                vec2 c = vUv - 0.5;
-                vec2 uv = (0.5 + c * (1.0 + uK * dot(c, c)) - uCrop.xy) / uCrop.zw;
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
-                if (uShowDepth > 0.5) {
-                    gl_FragColor = vec4(vec3(texture2D(uDepth, uv).r), 1.0);
-                    return;
-                }
-                vec2 hit = clamp(uv + uShift * uFocus, 0.0, 1.0);   // 都沒找到 = 最遠的背景
-                for (int i = 0; i <= 32; i++) {
-                    float t = 1.0 - float(i) / 32.0;              // 深度層:1 = 最近
-                    vec2 p = uv - uShift * (t - uFocus);
-                    if (texture2D(uDepth, clamp(p, 0.0, 1.0)).r >= t - 0.5 / 32.0) {
-                        hit = clamp(p, 0.0, 1.0);
-                        break;
-                    }
-                }
-                gl_FragColor = texture2D(uTex, hit);
-            }
-        """
-
         // 游標 + 面板,套用相同的鏡片校正,輸出預乘 alpha
         private const val OVERLAY_FS = """
             precision mediump float;
@@ -245,16 +206,6 @@ class VrRenderer(
     /** 4K / 8K 畫質時開啟 Mipmap(手機不支援時自動略過) */
     @Volatile var useMipmap = false
 
-    // ---- 立體照(暫停畫面 + 深度圖) ----
-    @Volatile var photoOn = false
-    @Volatile var photoShowDepth = false  // 顯示深度圖(檢查用)
-    @Volatile var photoStrength = 0.08f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
-    private var photoTex = 0
-    private var depthTex = 0
-    private var photoFbo = 0
-    private var smallTex = 0
-    private var smallFbo = 0
-    private var photoCrop = floatArrayOf(0f, 0f, 1f, 1f)   // 拍照時影片在網頁中的位置
     private var maxTex = 4096
 
     private var surfaceTexture: SurfaceTexture? = null
@@ -283,9 +234,6 @@ class VrRenderer(
     private lateinit var flatProg: Array<Prog>
     private lateinit var sphereProg: Array<Prog>
     private lateinit var blitProg: Prog
-    private var photoProg = 0
-    private var pPos = 0; private var pUv = 0; private var pTex = 0; private var pDepth = 0
-    private var pK = 0; private var pTilt = 0; private var pShift = 0; private var pFocus = 0; private var pCrop = 0; private var pShowDepth = 0
 
     // Mipmap 用的複製材質
     private var mipSupported = false
@@ -367,21 +315,6 @@ class VrRenderer(
         val ext = GLES20.glGetString(GLES20.GL_EXTENSIONS) ?: ""
         maxTex = IntArray(1).also { GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, it, 0) }[0]
         mipSupported = (ver.contains("OpenGL ES 3") || ext.contains("GL_OES_texture_npot")) && maxTex >= 3840
-
-        photoProg = buildProgram(VIDEO_VS, PHOTO_FS)
-        pPos = GLES20.glGetAttribLocation(photoProg, "aPos")
-        pUv = GLES20.glGetAttribLocation(photoProg, "aUv")
-        pTex = GLES20.glGetUniformLocation(photoProg, "uTex")
-        pDepth = GLES20.glGetUniformLocation(photoProg, "uDepth")
-        pK = GLES20.glGetUniformLocation(photoProg, "uK")
-        pTilt = GLES20.glGetUniformLocation(photoProg, "uTilt")
-        pShift = GLES20.glGetUniformLocation(photoProg, "uShift")
-        pFocus = GLES20.glGetUniformLocation(photoProg, "uFocus")
-        pCrop = GLES20.glGetUniformLocation(photoProg, "uCrop")
-        pShowDepth = GLES20.glGetUniformLocation(photoProg, "uShowDepth")
-        // GL 環境重建後舊的材質都沒了,立體照要重拍
-        photoTex = 0; depthTex = 0; photoFbo = 0; smallTex = 0; smallFbo = 0
-        photoOn = false
         mipTex = 0
         fbo = 0
         mipW = 0
@@ -585,8 +518,6 @@ class VrRenderer(
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
                 drawVideo(distortion, -side * tilt, sx, sy, ox, oy)
-                // 立體照:蓋在網頁中原本影片的位置,大小不變
-                if (m == MODE_2D && photoOn) drawPhoto(side)
             }
             // 控制面板與游標不放大、不移動,確保完整看得到;
             // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
@@ -615,129 +546,6 @@ class VrRenderer(
         GLES20.glUniform4f(p.uSrc, sx, sy, ox, oy)
         bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-    }
-
-    private fun drawPhoto(side: Float) {
-        GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glUseProgram(photoProg)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, photoTex)
-        GLES20.glUniform1i(pTex, 4)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE5)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex)
-        GLES20.glUniform1i(pDepth, 5)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glUniform1f(pK, distortion)
-        GLES20.glUniform1f(pTilt, -side * tilt)
-        // 左眼(side = -1)近的東西往右、右眼往左
-        GLES20.glUniform2f(pShift, -side * photoStrength / 2f, 0f)
-        GLES20.glUniform1f(pFocus, 0.4f)
-        GLES20.glUniform4f(pCrop, photoCrop[0], photoCrop[1], photoCrop[2], photoCrop[3])
-        GLES20.glUniform1f(pShowDepth, if (photoShowDepth) 1f else 0f)
-        bindQuad(pPos, pUv)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-    }
-
-    private fun newTarget(tex: Int, fbo: Int, w: Int, h: Int, mip: Boolean): Pair<Int, Int> {
-        val ids = IntArray(1)
-        var t = tex
-        var f = fbo
-        if (t == 0) { GLES20.glGenTextures(1, ids, 0); t = ids[0] }
-        if (f == 0) { GLES20.glGenFramebuffers(1, ids, 0); f = ids[0] }
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, t)
-        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
-            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER,
-            if (mip) GLES20.GL_LINEAR_MIPMAP_LINEAR else GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, f)
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-            GLES20.GL_TEXTURE_2D, t, 0)
-        return t to f
-    }
-
-    /** 把網頁畫面中 crop 這塊(比例,y 向上)畫到目前的 FBO */
-    private fun blitCrop(c: FloatArray, w: Int, h: Int) {
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
-        GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glViewport(0, 0, w, h)
-        val p = flatProg[0]
-        GLES20.glUseProgram(p.id)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
-        GLES20.glUniform1i(p.uTex, 0)
-        GLES20.glUniformMatrix4fv(p.uSt, 1, false, stMatrix, 0)
-        GLES20.glUniform1f(p.uK, 0f)
-        GLES20.glUniform1f(p.uTilt, 0f)
-        GLES20.glUniform4f(p.uSrc, c[2], c[3], c[0], c[1])
-        bindQuad(p.aPos, p.aUv)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-    }
-
-    /**
-     * GL 執行緒:拍下網頁中 crop 這塊(影片)當立體照,
-     * 回傳縮小成 inW*inH 的 RGBA(給深度模型用,列由下往上)。
-     */
-    fun capturePhoto(c: FloatArray, inW: Int, inH: Int): ByteArray? {
-        if (texId == 0) return null
-        if (frameAvailable) {
-            frameAvailable = false
-            surfaceTexture?.updateTexImage()
-            surfaceTexture?.getTransformMatrix(stMatrix)
-        }
-        photoCrop = c.copyOf()
-        // 照片本身:最長邊不超過 2048(與手機上看得到的清晰度相當)
-        var pw = (c[2] * srcW).toInt()
-        var ph = (c[3] * srcH).toInt()
-        val sc = minOf(1f, 2048f / maxOf(pw, ph))
-        pw = (pw * sc).toInt().coerceAtLeast(16)
-        ph = (ph * sc).toInt().coerceAtLeast(16)
-        val mip = mipSupported
-        newTarget(photoTex, photoFbo, pw, ph, mip).let { photoTex = it.first; photoFbo = it.second }
-        blitCrop(c, pw, ph)
-        if (mip) {
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, photoTex)
-            GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
-        }
-        // 模型用的小圖
-        newTarget(smallTex, smallFbo, inW, inH, false).let { smallTex = it.first; smallFbo = it.second }
-        blitCrop(c, inW, inH)
-        val buf = ByteBuffer.allocateDirect(inW * inH * 4).order(ByteOrder.nativeOrder())
-        GLES20.glReadPixels(0, 0, inW, inH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        val out = ByteArray(inW * inH * 4)
-        buf.position(0)
-        buf.get(out)
-        return out
-    }
-
-    /** GL 執行緒:放入深度圖(每像素 1 byte,越大越近)並開始顯示立體照 */
-    fun setDepth(depth: ByteArray, w: Int, h: Int) {
-        if (photoTex == 0) return
-        if (depthTex == 0) {
-            val ids = IntArray(1)
-            GLES20.glGenTextures(1, ids, 0)
-            depthTex = ids[0]
-        }
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE5)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex)
-        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
-        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, w, h, 0,
-            GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, ByteBuffer.wrap(depth))
-        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        photoOn = true
-        onDirty()
     }
 
     private fun drawSphere(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float, lonScale: Float) {

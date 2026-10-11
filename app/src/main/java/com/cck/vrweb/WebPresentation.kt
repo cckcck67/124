@@ -271,15 +271,11 @@ class WebPresentation(
         }
     }
 
-    /** YouTube VR 影片看的方向(度):yaw 向右為正、pitch 向上為正,fov = 視野 */
+    /** YouTube VR 影片看的方向(度):yaw、pitch 向上為正,fov = 視野 */
     fun youtubeLook(yaw: Float, pitch: Float, fov: Float) {
         js("(function(){var mp=document.getElementById('movie_player');" +
             "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
             "pitch:$pitch,roll:0,fov:$fov});})()")
-    }
-
-    fun pause() {
-        js("(function(){$FIND_VIDEO if(v)v.pause();})()")
     }
 
     /**

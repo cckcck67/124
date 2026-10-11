@@ -51,8 +51,7 @@ class VrMenu {
         const val BTN_MODE = 4
         const val BTN_RECENTER = 5
         const val BTN_SETTINGS = 6
-        const val BTN_PHOTO = 7
-        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定", "立體照")
+        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定")
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "YT環顧")
@@ -90,7 +89,6 @@ class VrMenu {
     var mode = 0            // VrRenderer.MODE_*
     var popup = NONE        // 目前拉出選項的按鈕(BTN_MODE)
     var settingsPage = false
-    var photo = 0           // 立體照:0 = 沒有,1 = 立體照,2 = 深度圖
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
@@ -264,7 +262,6 @@ class VrMenu {
             val label = when (i) {
                 BTN_POSTURE -> if (lying) "躺平" else "坐姿"
                 BTN_MODE -> MODE_NAMES[mode]
-                BTN_PHOTO -> when (photo) { 1 -> "深度圖"; 2 -> "退出立體"; else -> "立體照" }
                 else -> LABELS[i]
             }
             centerText.color = if (popup != NONE && popup != i) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()

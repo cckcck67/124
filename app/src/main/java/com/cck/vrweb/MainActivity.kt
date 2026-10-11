@@ -302,7 +302,6 @@ class MainActivity : Activity(), SensorEventListener {
         },
         Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
-        Setting("photo3", "立體照強度", 0.005f, 0f, 0.2f, "%.3f", { 0.08f }) { renderer.photoStrength = it },
     ) }
 
     private val sphereSettings by lazy { listOf(
@@ -316,9 +315,9 @@ class MainActivity : Activity(), SensorEventListener {
     private val speeds = floatArrayOf(0.5f, 1f, 1.5f)
     private var speedIndex = 1
 
-    // YouTube 環顧:平面顯示的設定 + YouTube 視野(立體照不適用)
+    // YouTube 環顧:平面顯示的設定 + YouTube 視野
     private val ytSettings by lazy {
-        flatSettings.filter { it.key != "photo3" } +
+        flatSettings +
             Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
     }
 
@@ -332,7 +331,6 @@ class MainActivity : Activity(), SensorEventListener {
 
     /** 切換模式:套用這個模式自己存的設定 */
     private fun setMode(m: Int) {
-        if (m != VrRenderer.MODE_2D) stopPhoto()
         renderer.mode = m
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
@@ -616,7 +614,6 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 模式切換 ----------------
 
     private fun setVr(on: Boolean) {
-        stopPhoto()
         vrMode = on
         renderer.vrMode = on
         renderer.showCursor = false
@@ -771,10 +768,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun onSelect() {
         when {
             menuOpen -> if (menu.hover != VrMenu.NONE) activate(menu.hover)
-            else -> {
-                stopPhoto()                          // 看立體照時點一下 = 回到影片繼續播
-                presentation?.togglePlay()           // 沒開面板時點一下 = 播放/暫停
-            }
+            else -> presentation?.togglePlay()      // 沒開面板時點一下 = 播放/暫停
         }
     }
 
@@ -869,7 +863,8 @@ class MainActivity : Activity(), SensorEventListener {
         val az = sensorAz
         val down = sensorDown
         lastAz = az
-        if (renderer.mode == VrRenderer.MODE_YT) youtubeLook(az, down)
+        // 面板打開時畫面不動,紅點才不會因為網頁忙著轉畫面而亂飄
+        if (renderer.mode == VrRenderer.MODE_YT && !menuOpen) youtubeLook(az, down)
 
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
         val lying = VrMenu.lying
@@ -900,7 +895,7 @@ class MainActivity : Activity(), SensorEventListener {
         redraw()
     }
 
-    // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 60 次,沒變就不送)
+    // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 30 次,沒變就不送)
     private var ytFov = 100f
     private var lastYtAt = 0L
     private var lastYtYaw = 999f
@@ -908,8 +903,9 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun youtubeLook(az: Float, down: Float) {
         val now = SystemClock.uptimeMillis()
-        if (now - lastYtAt < 16) return
-        val yaw = Math.toDegrees(az.toDouble()).toFloat()
+        if (now - lastYtAt < 33) return
+        // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
+        val yaw = -Math.toDegrees(az.toDouble()).toFloat()
         val pitch = -Math.toDegrees(down.toDouble()).toFloat()
         if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
         lastYtAt = now
@@ -989,7 +985,6 @@ class MainActivity : Activity(), SensorEventListener {
         val p = presentation ?: return
         when (target) {
             VrMenu.BAR -> {
-                stopPhoto()
                 p.seekTo(menu.hoverFrac)
                 menu.current = menu.hoverFrac * menu.duration
             }
@@ -1001,8 +996,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setMenu(false)
                 return
             }
-            VrMenu.BTN_FWD -> { stopPhoto(); p.seekBy(10) }
-            VrMenu.BTN_PHOTO -> startPhoto()
+            VrMenu.BTN_FWD -> p.seekBy(10)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
@@ -1029,83 +1023,7 @@ class MainActivity : Activity(), SensorEventListener {
         redrawPanel(force = true)
     }
 
-    // ---------------- 立體照 ----------------
-
-    private var photoBusy = false
-
-    /** 面板「立體照」:暫停影片 → 拍下畫面 → 手機上算深度 → 兩眼依深度錯開,變成立體 */
-    private fun startPhoto() {
-        // 再按一次:立體照 → 深度圖(檢查模型算出的遠近,越白越近)→ 退出
-        if (renderer.photoOn) {
-            if (!renderer.photoShowDepth) {
-                renderer.photoShowDepth = true
-                menu.photo = 2
-                redrawPanel(force = true)
-                redraw()
-            } else stopPhoto()
-            return
-        }
-        if (photoBusy) return
-        if (renderer.mode != VrRenderer.MODE_2D) {
-            showMessage("請先切到", "2D 模式", 2500)
-            return
-        }
-        val p = presentation ?: return
-        photoBusy = true
-        showMessage("拍照中", "")
-        p.pause()
-        p.videoRect(false) { r ->
-            val c = toCrop(r)
-            handler.postDelayed({ capturePhoto(c) }, 400)   // 等暫停後的最後一格畫面
-        }
-    }
-
-    private fun capturePhoto(c: FloatArray) {
-        val (w, h) = DepthModel.inputSize(c[2] * srcW / (c[3] * srcH))
-        glView.queueEvent {
-            val rgba = try { renderer.capturePhoto(c, w, h) } catch (e: Exception) { null }
-            handler.post {
-                if (rgba == null) { photoFailed("拍照失敗"); return@post }
-                Thread {
-                    try {
-                        if (!DepthModel.isDownloaded(this)) {
-                            handler.post { showMessage("下載模型", "0%") }
-                            DepthModel.download(this) { pct -> handler.post { showMessage("下載模型", "$pct%") } }
-                        }
-                        handler.post { showMessage("計算深度", "請稍候") }
-                        val d = DepthModel.estimate(this, rgba, w, h)
-                        handler.post {
-                            photoBusy = false
-                            // 算好前已離開 VR 或換了模式就不顯示
-                            if (!vrMode || renderer.mode != VrRenderer.MODE_2D) { hideMessage(); return@post }
-                            glView.queueEvent { renderer.setDepth(d, w, h) }
-                            renderer.photoShowDepth = false
-                            menu.photo = 1
-                            showMessage("立體照", "完成", 1500)
-                            redrawPanel(force = true)
-                        }
-                    } catch (e: Throwable) {
-                        handler.post { photoFailed(if (e is java.io.IOException) "下載失敗" else "計算失敗") }
-                    }
-                }.start()
-            }
-        }
-        redraw()
-    }
-
-    private fun photoFailed(msg: String) {
-        photoBusy = false
-        showMessage(msg, "請再試一次", 3000)
-    }
-
-    private fun stopPhoto() {
-        if (!renderer.photoOn && menu.photo == 0) return
-        renderer.photoOn = false
-        renderer.photoShowDepth = false
-        menu.photo = 0
-        redrawPanel(force = true)
-        redraw()
-    }
+    // ---------------- 畫面中央提示 ----------------
 
     private val msgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
