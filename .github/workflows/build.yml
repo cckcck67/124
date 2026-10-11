@@ -2,6 +2,7 @@ name: Build APK
 
 on:
   push:
+    branches: ['**']   # 標籤(v1.0 等)由 release-tag.yml 處理
   workflow_dispatch:
 
 permissions:

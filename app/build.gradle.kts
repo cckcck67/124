@@ -15,7 +15,8 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 100 + buildNumber
-        versionName = "1.$buildNumber"
+        // 定版標籤(v1.0 等)編譯時用 -PversionLabel 指定版本名稱
+        versionName = (project.findProperty("versionLabel") as String?) ?: "1.$buildNumber"
     }
     // 固定簽章:每次編譯出來的 APK 簽章相同,新版可直接安裝覆蓋舊版(不用先解除安裝)
     signingConfigs {
