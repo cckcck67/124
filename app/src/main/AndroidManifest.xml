@@ -22,6 +22,11 @@
             </intent-filter>
         </activity>
 
-        <receiver android:name=".InstallReceiver" android:exported="false" />
+        <!-- 新版 APK 交給系統安裝程式讀取 -->
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="${applicationId}.apk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

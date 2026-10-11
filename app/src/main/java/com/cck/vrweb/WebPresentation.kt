@@ -19,6 +19,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -26,7 +29,41 @@ import org.json.JSONObject
  * 顯示在「看不見的虛擬螢幕」上的瀏覽器。
  * 它的畫面會被 VrRenderer 當成材質畫出來;觸控由 MainActivity 轉送進來。
  */
-class WebPresentation(outer: Context, display: Display) : Presentation(outer, display) {
+class WebPresentation(
+    outer: Context, display: Display,
+    private val screenW: Int, private val screenH: Int   // 虛擬螢幕像素大小(依畫質)
+) : Presentation(outer, display) {
+
+    companion object {
+        /**
+         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用電腦版 Chrome 的身分
+         * (電腦版播放器才能用程式控制 VR 影片看的方向)
+         */
+        fun isYouTube(url: String?): Boolean {
+            val host = try { android.net.Uri.parse(url ?: return false).host ?: return false } catch (e: Exception) { return false }
+            return host == "youtu.be" || host == "youtube.com" || host.endsWith(".youtube.com")
+        }
+
+        /** 電腦版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
+        fun chromeUserAgent(base: String): String {
+            val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/$major.0.0.0 Safari/537.36"
+        }
+    }
+
+    private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
+    private var chromeUa = ""    // YouTube:電腦版 Chrome
+
+    /** 依要前往的網址切換身分;有改變回傳 true(之後的載入才會套用) */
+    private fun applyUa(url: String?): Boolean {
+        val want = if (isYouTube(url)) chromeUa else appUa
+        if (webView.settings.userAgentString == want) return false
+        webView.settings.userAgentString = want
+        return true
+    }
+
+    private var resumeSec = -1.0   // 重新載入後要跳回的播放位置(切換畫質用)
 
     private lateinit var root: FrameLayout
     lateinit var webView: WebView
@@ -55,17 +92,46 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
             builtInZoomControls = true
             displayZoomControls = false
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
-            userAgentString = userAgentString.replace("; wv", "")
+            appUa = userAgentString.replace("; wv", "")
+            chromeUa = chromeUserAgent(userAgentString)
+            userAgentString = appUa
         }
+        // YouTube:不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制)
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(webView, BLOCK_ORIENTATION,
+                    setOf("https://youtube.com", "https://*.youtube.com"))
+            }
+        } catch (e: Throwable) {}
+        // 不在每次連線附上 App 名稱(X-Requested-With),網站較難認出是 App 內的網頁
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+                WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
+            }
+        } catch (e: Throwable) {}
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val scheme = request.url.scheme ?: return true
-                return scheme != "http" && scheme != "https" // 擋掉 intent:// 等跳 App 的連結
+                if (scheme != "http" && scheme != "https") return true  // 擋掉 intent:// 等跳 App 的連結
+                // 進出 YouTube 時換身分,用新身分重新載入
+                if (request.isForMainFrame && applyUa(request.url.toString())) {
+                    view.loadUrl(request.url.toString())
+                    return true
+                }
+                return false
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 // 有些網站禁止縮放,把限制拿掉,讓雙指可以放大縮小
                 view.evaluateJavascript(ALLOW_ZOOM, null)
+                // 切換畫質後重新載入:等影片出現,跳回原本的位置繼續播
+                if (resumeSec >= 0) {
+                    view.evaluateJavascript("(function(t){var n=0,h=setInterval(function(){n++;" +
+                        "var v=document.querySelector('video');" +
+                        "if(v&&v.readyState>0){if(t>1)v.currentTime=t;if(v.play)v.play();clearInterval(h);}" +
+                        "else if(n>40)clearInterval(h);},500);})($resumeSec)", null)
+                    resumeSec = -1.0
+                }
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
@@ -86,7 +152,7 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
 
-        pendingUrl?.let { webView.loadUrl(it) }
+        pendingUrl?.let { applyUa(it); webView.loadUrl(it) }
         pendingUrl = null
     }
 
@@ -96,8 +162,14 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
         customCallback = null
     }
 
+    /** 載入網址,載入完成後跳到指定秒數繼續播放 */
+    fun loadUrl(url: String, resumeAt: Double) {
+        resumeSec = resumeAt
+        loadUrl(url)
+    }
+
     fun loadUrl(url: String) {
-        if (::webView.isInitialized) webView.loadUrl(url) else pendingUrl = url
+        if (::webView.isInitialized) { applyUa(url); webView.loadUrl(url) } else pendingUrl = url
     }
 
     val currentTitle: String?
@@ -172,7 +244,7 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
     fun seekBy(sec: Int) {
         js("(function(){$FIND_VIDEO if(!v)return false;" +
                 "v.currentTime=Math.max(0,v.currentTime+($sec));return true;})()") { r ->
-            if (r != "true") tap(MainActivity.SRC_W * (if (sec < 0) 0.2f else 0.8f), MainActivity.SRC_H * 0.5f, 2)
+            if (r != "true") tap(screenW * (if (sec < 0) 0.2f else 0.8f), screenH * 0.5f, 2)
         }
     }
 
@@ -185,8 +257,27 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
     fun togglePlay() {
         js("(function(){$FIND_VIDEO if(!v)return false;" +
                 "if(v.paused)v.play();else v.pause();return true;})()") { r ->
-            if (r != "true") tap(MainActivity.SRC_W * 0.5f, MainActivity.SRC_H * 0.5f, 1)
+            if (r != "true") tap(screenW * 0.5f, screenH * 0.5f, 1)
         }
+    }
+
+    /** YouTube 的 360 / VR180 影片(網頁版只有單眼,可以控制看的方向) */
+    /** 回傳投影格式(MESH = VR180、EQUIRECTANGULAR = 360 …);不是 VR 影片回傳空字串 */
+    fun youtubeSpherical(cb: (String) -> Unit) {
+        js("(function(){var mp=document.getElementById('movie_player');" +
+            "if(!mp||!mp.getPlayerResponse||!mp.setSphericalProperties)return '';" +
+            "var pr=mp.getPlayerResponse()||{},fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],p='';" +
+            "fs.forEach(function(f){if(!p&&f.projectionType&&f.projectionType!=='RECTANGULAR')p=f.projectionType;});" +
+            "return p;})()") {
+            cb(it?.trim('"')?.takeIf { s -> s != "null" } ?: "")
+        }
+    }
+
+    /** YouTube VR 影片看的方向(度):yaw、pitch 向上為正,fov = 視野 */
+    fun youtubeLook(yaw: Float, pitch: Float, fov: Float) {
+        js("(function(){var mp=document.getElementById('movie_player');" +
+            "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
+            "pitch:$pitch,roll:0,fov:$fov});})()")
     }
 
     /**
@@ -286,6 +377,11 @@ class WebPresentation(outer: Context, display: Display) : Presentation(outer, di
 private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
     "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
+
+// 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
+private const val BLOCK_ORIENTATION =
+    "['deviceorientation','deviceorientationabsolute','devicemotion'].forEach(function(t){" +
+    "window.addEventListener(t,function(e){e.stopImmediatePropagation();},true);});"
 
 // 拿掉網頁「禁止縮放」的設定(user-scalable=no、maximum-scale=1)
 private const val ALLOW_ZOOM =

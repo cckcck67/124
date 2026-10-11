@@ -10,7 +10,7 @@ import android.graphics.RectF
  * 各排由「靠近畫面中央」往外依序是:
  * 空白列(游標從這裡開始,不會誤觸)→ 進度條 → 按鈕 → 資訊列。
  * 「模式」按鈕會拉出選項列,看著選項就能選;選項拉出時其他按鈕暫停作用。
- * 「設定」按鈕切換到設定頁:每項有 − / + 按鈕,邊看邊調。
+ * 「設定」按鈕切換到設定頁:每項有 − / + 按鈕,邊看邊調;抬頭收起面板就離開設定頁。
  * 用「注視停留」選取(看著不動一下子就觸發),不用打開 VR 盒子點螢幕。
  * 座標:cx, cy 為畫面比例(0~1,y 向下)。
  */
@@ -43,7 +43,6 @@ class VrMenu {
         const val NONE = -1
         const val BAR = 100
         const val OPTION = 200               // 選項列第 i 個 = OPTION + i
-        const val SET_BACK = 290             // 設定頁的「返回」
         const val SET_MINUS = 300            // 設定頁第 i 項的 − = SET_MINUS + 2i,+ = SET_MINUS + 2i + 1
         const val BTN_POSTURE = 0
         const val BTN_VOL_DOWN = 1
@@ -55,10 +54,9 @@ class VrMenu {
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定")
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR")
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "YT環顧")
 
-        // 設定頁:兩欄,每格 = 名稱與數值、−、+
-        private const val SET_COLS = 2
+        // 設定頁:兩欄(項目多時三欄),每格 = 名稱與數值、−、+
         private const val SET_TOP = 80f
         private const val SET_ROW_H = 86f
 
@@ -112,18 +110,18 @@ class VrMenu {
     private fun selectedOption() = mode
 
     // ---- 設定頁格子位置(坐姿版面座標) ----
-    private fun cellCount() = settingRows.size + 1   // 最後一格是「返回」
-    private fun cellLeft(i: Int) = ROW_L + (i % SET_COLS) * ((ROW_R - ROW_L) / SET_COLS)
-    private fun cellTop(i: Int) = SET_TOP + (i / SET_COLS) * SET_ROW_H
-    private fun cellW() = (ROW_R - ROW_L) / SET_COLS
+    private fun cellCount() = settingRows.size   // 不設「返回」:抬頭收起面板就離開設定頁
+    private fun cols() = if (cellCount() > 8) 3 else 2  // 超過 4 排就改三欄,才放得進面板
+    private fun cellLeft(i: Int) = ROW_L + (i % cols()) * cellW()
+    private fun cellTop(i: Int) = SET_TOP + (i / cols()) * SET_ROW_H
+    private fun cellW() = (ROW_R - ROW_L) / cols()
 
     private fun hitSettings(px: Float, py: Float): Int {
         if (py < SET_TOP) return NONE
         val row = ((py - SET_TOP) / SET_ROW_H).toInt()
-        val col = ((px - ROW_L) / cellW()).toInt().coerceIn(0, SET_COLS - 1)
-        val i = row * SET_COLS + col
+        val col = ((px - ROW_L) / cellW()).toInt().coerceIn(0, cols() - 1)
+        val i = row * cols() + col
         if (i >= cellCount()) return NONE
-        if (i == settingRows.size) return SET_BACK
         val x = px - cellLeft(i)
         val w = cellW()
         return when {
@@ -175,7 +173,13 @@ class VrMenu {
             rect.set(l, t, l + (r - l) * dw, b)
             c.drawRoundRect(rect, 18f, 18f, fillPaint)
         }
+        // 字太長就縮小,放得進按鈕
+        val size = centerText.textSize
+        val maxW = (r - l) - 16
+        val tw = centerText.measureText(label)
+        if (tw > maxW) centerText.textSize = size * maxW / tw
         c.drawText(label, (l + r) / 2, (t + b) / 2 + 14, centerText)
+        centerText.textSize = size
     }
 
     private fun drawSettings(c: Canvas) {
@@ -183,17 +187,17 @@ class VrMenu {
         for (i in 0 until cellCount()) {
             val l = cellLeft(i) + 6
             val (t, bt) = band(cellTop(i) + 4, cellTop(i) + SET_ROW_H - 4)
-            if (i == settingRows.size) {
-                centerText.textSize = 36f
-                drawButton(c, l, t, l + w - 12, bt, hover == SET_BACK, if (hover == SET_BACK) dwell else 0f, "返回")
-                continue
-            }
             val (name, value) = settingRows[i]
             rect.set(l, t, l + w * 0.57f, bt)
             fillPaint.color = 0xFF202020.toInt()
             c.drawRoundRect(rect, 14f, 14f, fillPaint)
-            centerText.textSize = 32f
-            c.drawText("$name  $value", l + w * 0.285f, (t + bt) / 2 + 12, centerText)
+            // 名稱和數值分兩行,三欄時也放得下
+            centerText.textSize = 28f
+            val mid = (t + bt) / 2
+            c.drawText(name, l + w * 0.285f, mid - 6, centerText)
+            centerText.color = 0xFFFFD040.toInt()
+            c.drawText(value, l + w * 0.285f, mid + 28, centerText)
+            centerText.color = 0xFFFFFFFF.toInt()
             centerText.textSize = 44f
             val minus = SET_MINUS + 2 * i
             drawButton(c, l + w * 0.59f, t, l + w * 0.78f, bt, hover == minus, if (hover == minus) dwell else 0f, "−")

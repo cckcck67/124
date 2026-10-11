@@ -34,4 +34,23 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // 測試失敗時在編譯紀錄印出完整錯誤位置
+        unitTests.all {
+            it.testLogging {
+                events("failed")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showStackTraces = true
+            }
+        }
+    }
+}
+
+dependencies {
+    // 網頁不附上 App 名稱標頭(X-Requested-With)
+    implementation("androidx.webkit:webkit:1.8.0")
+    // 只用在啟動測試(不會打包進 App)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
 }

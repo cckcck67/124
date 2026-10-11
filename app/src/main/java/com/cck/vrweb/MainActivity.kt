@@ -19,6 +19,7 @@ import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
@@ -49,10 +50,17 @@ import kotlin.math.sin
 class MainActivity : Activity(), SensorEventListener {
 
     companion object {
-        // 網頁所在虛擬螢幕的解析度(16:9)。DPI 360 = 2.25 倍縮放,排版和 1280x720@240 相同但更清楚
-        const val SRC_W = 1920
-        const val SRC_H = 1080
-        const val SRC_DPI = 360
+        // 網頁所在虛擬螢幕的畫質(16:9)。DPI 跟著解析度等比例調整,網頁排版都和 1280x720@240 相同
+        val QUALITY_W = intArrayOf(1920, 2560, 3840)
+        val QUALITY_H = intArrayOf(1080, 1440, 2160)
+        val QUALITY_DPI = intArrayOf(360, 480, 720)
+        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
+        const val QUALITY_4K = 2
+
+        /** App 內建首頁 */
+        const val HOME_URL = "file:///android_asset/home.html"
+
+        const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
         // 低頭控制面板(單位:弧度,以水平線為準)
         // 叫出面板的角度(弧度,相對於正前方)
@@ -62,10 +70,12 @@ class MainActivity : Activity(), SensorEventListener {
         const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
         const val LIE_OPEN_FLAT = 0.349f // 躺平(2D / 左右3D):抬頭約 20 度打開
         const val LIE_CLOSE_FLAT = 0.24f //       回到約 14 度內關閉
-        const val MENU_Y_RANGE = 0.40f   // 面板一端到另一端 = 頭轉約 23 度
+        const val LIE_OPEN_YT = 0.611f   // 躺平(YT環顧):抬頭約 35 度打開(抬頭看影片上方時不會誤開)
+        const val LIE_CLOSE_YT = 0.436f  //       回到約 25 度內關閉
+        const val MENU_Y_RANGE = 0.48f   // 面板一端到另一端 = 頭轉約 27 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
-        const val MENU_YAW_RANGE = 1.1f  // 面板左端到右端 = 轉頭約 63 度
-        const val SMOOTH = 0.12f         // 游標平滑(越小越穩、越慢)
+        const val MENU_YAW_RANGE = 1.35f // 面板左端到右端 = 轉頭約 77 度
+        const val CURSOR_TAU = 0.06f     // 游標平滑的時間常數(秒),越大越穩、越慢
         const val RECENTER_DELAY_MS = 3000L  // 按「置中」後倒數 3 秒,給時間抬頭看正前方
         const val ENTER_DELAY_MS = 5000L     // 進入 VR 後倒數 5 秒置中,給時間把手機放進盒子
         const val DWELL_MS = 1200L       // 看著按鈕多久觸發
@@ -74,6 +84,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val FWD_REPEAT_MS = 800L   // 快進鍵持續看著時的重複間隔
 
         const val TICK_MS = 400L         // 定時檢查網頁捲動 / 影片位置
+        const val UPDATE_CHECK_MS = 30 * 60 * 1000L
         const val PULL_SHOW_PX = 120f    // 網頁在最上面時再往下拉多少就叫出網址列
     }
 
@@ -90,23 +101,36 @@ class MainActivity : Activity(), SensorEventListener {
 
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: WebPresentation? = null
-    private var vrMode = false
+    private var displaySurface: Surface? = null
+    private var quality = 1                 // QUALITY_* 的索引,預設 1440p
+    private var srcW = QUALITY_W[1]
+    private var srcH = QUALITY_H[1]
+    @Volatile private var vrMode = false
+
+    // 頭部感應器在背景執行緒處理,算好的結果交給主執行緒更新面板
+    private var sensorThread: HandlerThread? = null
+    @Volatile private var sensorAz = 0f
+    @Volatile private var sensorDown = 0f
+    @Volatile private var menuStepPosted = false
+    private var lastCursorAt = 0L
+    private val headBuf = arrayOf(FloatArray(9), FloatArray(9))   // 兩份輪流用,避免每次產生新陣列
+    private var headIdx = 0
     private var ticking = false
     private var lastScrollY = 0f
     private var barShown = true         // 網址列:網頁捲到最上面後再往下拉才出現,往下捲就收起
 
     // 頭部方向
     private val rot = FloatArray(9)
-    private var reverseLandscape = false
+    @Volatile private var reverseLandscape = false
     // 參考方向(右、上、前):VR180 的影片方向,以及判斷「低頭」的基準。
     // 進入 VR 時 = 水平面、目前面向;置中後 = 當時頭的完整方向(可躺著看)
     private val refR = FloatArray(3)
     private val refU = FloatArray(3)
     private val refF = FloatArray(3)
-    private var needLevelRef = true
-    private var recenter = false
-    private var recenterAt = 0L
-    private var lastAz = 0f
+    @Volatile private var needLevelRef = true
+    @Volatile private var recenter = false
+    @Volatile private var recenterAt = 0L
+    @Volatile private var lastAz = 0f
 
     // 控制面板
     private val menu = VrMenu()
@@ -132,38 +156,61 @@ class MainActivity : Activity(), SensorEventListener {
         prefs = getSharedPreferences("vr", MODE_PRIVATE)
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        // 已移除的立體照功能留下的深度模型(約 27MB),刪掉釋放空間
+        java.io.File(filesDir, "depth.onnx").delete()
 
-        renderer = VrRenderer(SRC_W, SRC_H) { st -> handler.post { attachSurface(st) } }
+        quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
+        srcW = QUALITY_W[quality]
+        srcH = QUALITY_H[quality]
+        renderer = VrRenderer(srcW, srcH) { st -> handler.post { attachSurface(st) } }
+        renderer.useMipmap = quality >= QUALITY_4K
         renderer.distortion = prefs.getFloat("k", 0.15f)
         VrMenu.lying = prefs.getBoolean("lying", false)
-        setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
 
         glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
             setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            // 有變化才重畫:新影片畫面、轉頭(球面模式)、面板更新時才排重畫,靜止時不耗電
+            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
         }
+        renderer.onDirty = { redraw() }
+        setMode(prefs.getInt("mode", VrRenderer.MODE_2D).coerceIn(0, VrMenu.MODE_NAMES.size - 1))
 
         buildUi()
         setupGestures()
         hideSystemBars()
 
-        // 開啟幾秒後在背景檢查有沒有新版本(VR 模式中不打擾)
+    }
+
+    /** 排一次重畫(畫面元件建立前呼叫會略過;任何執行緒都可以呼叫) */
+    private fun redraw() {
+        if (::glView.isInitialized) glView.requestRender()
+    }
+
+    /** 背景檢查有沒有新版本(VR 模式中不打擾;回到 App 時最多每 30 分鐘檢查一次) */
+    private var lastUpdateCheck = 0L
+
+    private fun checkUpdateSoon() {
+        val now = SystemClock.uptimeMillis()
+        if (lastUpdateCheck != 0L && now - lastUpdateCheck < UPDATE_CHECK_MS) return
+        lastUpdateCheck = now
         handler.postDelayed({
-            if (!vrMode) Updater(this) { hideSystemBars() }.check()
+            if (!vrMode && !isFinishing) Updater(this) { hideSystemBars() }.check()
         }, 3000)
     }
 
     // ---------------- 介面 ----------------
 
+    private lateinit var qualityButton: Button
+
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
+        qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
 
         urlInput = EditText(this).apply {
             setSingleLine()
             hint = "網址 / 關鍵字(yt 開頭 = 搜尋 YouTube)"
-            setText(prefs.getString("url", "https://m.youtube.com"))
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             imeOptions = EditorInfo.IME_ACTION_GO
@@ -178,9 +225,10 @@ class MainActivity : Activity(), SensorEventListener {
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(bg)
             addView(button("←") { presentation?.handleBack() })
+            addView(button("首頁") { openUrl(HOME_URL) })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(button("★") { showBookmarks() })
-            addView(button("前往") { go() })
+            addView(qualityButton)
             addView(button("VR") { setVr(true) })
         }
 
@@ -193,6 +241,22 @@ class MainActivity : Activity(), SensorEventListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         }
         setContentView(root)
+    }
+
+    /** 網址列「畫質」:選好後重新載入目前網頁(回到原本的播放位置) */
+    private fun chooseQuality() {
+        hideKeyboard()
+        val names = arrayOf("1080p", "1440p(預設)", "4K")
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("畫質(越高越清楚,但越耗電)")
+            .setSingleChoiceItems(names, quality) { d, i ->
+                d.dismiss()
+                setQuality(i)
+            }
+            .setNegativeButton("取消", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
     }
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
@@ -231,7 +295,17 @@ class MainActivity : Activity(), SensorEventListener {
     private val speeds = floatArrayOf(0.5f, 1f, 1.5f)
     private var speedIndex = 1
 
-    private fun modeSettings(m: Int) = if (VrRenderer.isSphere(m)) sphereSettings else flatSettings
+    // YouTube 環顧:平面顯示的設定 + YouTube 視野
+    private val ytSettings by lazy {
+        flatSettings +
+            Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
+    }
+
+    private fun modeSettings(m: Int) = when {
+        VrRenderer.isSphere(m) -> sphereSettings
+        m == VrRenderer.MODE_YT -> ytSettings
+        else -> flatSettings
+    }
 
     private fun settingValue(m: Int, st: Setting) = prefs.getFloat("m${m}_${st.key}", st.def(m))
 
@@ -241,6 +315,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
         for (st in modeSettings(m)) st.apply(settingValue(m, st))
+        redraw()
     }
 
     /** 設定頁第 i 項 + / −(最後一項是播放速度) */
@@ -256,6 +331,7 @@ class MainActivity : Activity(), SensorEventListener {
         val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
         prefs.edit().putFloat("m${m}_${st.key}", v).apply()
         st.apply(v)
+        redraw()
     }
 
     private fun refreshSettingRows() {
@@ -291,11 +367,11 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun openUrl(url: String) {
-        urlInput.setText(url)
+        urlInput.setText(if (url == HOME_URL) "" else url)
         presentation?.loadUrl(url)
         hideKeyboard()
-        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現
-        barShown = false
+        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現(首頁不收)
+        barShown = url == HOME_URL
         updateTopBar()
     }
 
@@ -422,19 +498,57 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun attachSurface(st: SurfaceTexture) {
         val surface = Surface(st)
+        displaySurface = surface
         virtualDisplay?.let { it.surface = surface; return }
+        createDisplay(HOME_URL, -1.0)   // 開啟 App 先到首頁
+    }
 
+    /** 建立虛擬螢幕與上面的網頁(私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限) */
+    private fun createDisplay(url: String, resumeAt: Double) {
+        val surface = displaySurface ?: return
         val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        // 私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限
         val vd = dm.createVirtualDisplay(
-            "vr-web", SRC_W, SRC_H, SRC_DPI, surface,
+            "vr-web", srcW, srcH, QUALITY_DPI[quality], surface,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         )
         virtualDisplay = vd
-        presentation = WebPresentation(this, vd.display).also {
+        presentation = WebPresentation(this, vd.display, srcW, srcH).also {
             it.show()
-            it.loadUrl(prefs.getString("url", "https://m.youtube.com")!!)
+            it.loadUrl(url, resumeAt)
         }
+    }
+
+    /**
+     * 切換畫質:Android 的網頁視窗不支援直接改解析度,
+     * 所以重建虛擬螢幕並重新載入目前網頁,載入後跳回原本的播放位置。
+     */
+    private fun setQuality(q: Int) {
+        if (q == quality) return
+        quality = q
+        prefs.edit().putInt("quality", q).apply()
+        srcW = QUALITY_W[q]
+        srcH = QUALITY_H[q]
+        recreateWeb()
+    }
+
+    /** 重建虛擬螢幕與網頁(換畫質 / 瀏覽器身分),回到目前網頁與播放位置 */
+    private fun recreateWeb() {
+        val p = presentation ?: return recreateWeb(HOME_URL, -1.0)
+        // 先問網頁目前播放到哪裡,重新載入後跳回去
+        p.videoStatus { st -> recreateWeb(p.currentUrl ?: HOME_URL, st?.current ?: -1.0) }
+    }
+
+    private fun recreateWeb(url: String, at: Double) {
+        val q = quality
+        presentation?.release()
+        presentation?.dismiss()
+        virtualDisplay?.release()
+        presentation = null
+        virtualDisplay = null
+        renderer.setBufferSize(srcW, srcH)
+        renderer.useMipmap = q >= QUALITY_4K
+        qualityButton.text = QUALITY_NAMES[q]
+        createDisplay(url, at)
     }
 
     // ---------------- 定時檢查 ----------------
@@ -456,19 +570,25 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (renderer.vrMode && renderer.mode != VrRenderer.MODE_2D) {
                     // 找出影片在網頁中的位置,VR 畫面只取影片本身
-                    p.videoRect(false) { r ->
-                        renderer.crop = if (r == null) floatArrayOf(0f, 0f, 1f, 1f) else {
-                            val x = r[0].coerceIn(0f, 1f)
-                            val y = r[1].coerceIn(0f, 1f)
-                            val w = r[2].coerceIn(0.05f, 1f - x)
-                            val h = r[3].coerceIn(0.05f, 1f - y)
-                            floatArrayOf(x, 1f - y - h, w, h)   // 轉成 y 向上
-                        }
+                    // YouTube 環顧:取整個播放器(畫面由 YouTube 自己轉好)
+                    p.videoRect(renderer.mode == VrRenderer.MODE_YT) { r ->
+                        renderer.crop = toCrop(r)
+                        redraw()
                     }
                 }
             }
             handler.postDelayed(this, TICK_MS)
         }
+    }
+
+    /** 網頁回報的影片位置(y 向下)→ 渲染用的 [x, y, 寬, 高](y 向上);找不到影片 = 整頁 */
+    private fun toCrop(r: FloatArray?): FloatArray {
+        if (r == null) return floatArrayOf(0f, 0f, 1f, 1f)
+        val x = r[0].coerceIn(0f, 1f)
+        val y = r[1].coerceIn(0f, 1f)
+        val w = r[2].coerceIn(0.05f, 1f - x)
+        val h = r[3].coerceIn(0.05f, 1f - y)
+        return floatArrayOf(x, 1f - y - h, w, h)
     }
 
     // ---------------- 模式切換 ----------------
@@ -489,6 +609,7 @@ class MainActivity : Activity(), SensorEventListener {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
         }
+        redraw()
     }
 
     /**
@@ -496,13 +617,29 @@ class MainActivity : Activity(), SensorEventListener {
      * 其他比例若原本是球面模式就回到 2D,否則維持(2D / 左右3D 看不出來)。猜錯可用面板「模式」改。
      */
     private fun autoDetectMode() {
-        presentation?.videoSize { w, h ->
+        val p = presentation ?: return
+        // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
+        val onYouTube = WebPresentation.isYouTube(p.currentUrl)
+        p.youtubeSpherical { proj ->
+            val yt = proj.isNotEmpty()
+            ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
+            if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
+            else detectByAspect(p)
+            // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)
+            if (onYouTube) handler.postDelayed({
+                if (vrMode) showMessage(if (yt) "YT環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
+            }, ENTER_DELAY_MS + 300)
+        }
+    }
+
+    private fun detectByAspect(p: WebPresentation) {
+        p.videoSize { w, h ->
             if (w <= 0 || h <= 0) return@videoSize
             val r = w.toFloat() / h
             val m = when {
                 r in 1.85f..2.15f -> VrRenderer.MODE_VR180
                 r in 0.9f..1.1f -> VrRenderer.MODE_TB360
-                VrRenderer.isSphere(renderer.mode) -> VrRenderer.MODE_2D
+                VrRenderer.isSphere(renderer.mode) || renderer.mode == VrRenderer.MODE_YT -> VrRenderer.MODE_2D
                 else -> renderer.mode
             }
             if (m != renderer.mode) setMode(m)
@@ -510,9 +647,13 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     @Suppress("DEPRECATION")
-    private fun displayRotation(): Int =
+    private fun displayRotation(): Int = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation ?: Surface.ROTATION_90
         else windowManager.defaultDisplay.rotation
+    } catch (e: Exception) {
+        // 少數裝置/環境拿不到 display 時,不要讓 App 閃退
+        try { windowManager.defaultDisplay.rotation } catch (e2: Exception) { Surface.ROTATION_90 }
+    }
 
     // ---------------- 觸控 ----------------
 
@@ -539,8 +680,8 @@ class MainActivity : Activity(), SensorEventListener {
         val coords = Array(n) { i ->
             MotionEvent.PointerCoords().also { c ->
                 ev.getPointerCoords(i, c)
-                c.x = (c.x - r[0]) / r[2] * SRC_W
-                c.y = (c.y - r[1]) / r[3] * SRC_H
+                c.x = (c.x - r[0]) / r[2] * srcW
+                c.y = (c.y - r[1]) / r[3] * srcH
             }
         }
         val x = coords[0].x
@@ -642,6 +783,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 頭部追蹤 ----------------
 
+    /** 背景執行緒(VR-Sensor):算頭部方向,球面模式直接更新渲染用的矩陣 */
     override fun onSensorChanged(event: SensorEvent) {
         if (!vrMode) return
         val r = rot
@@ -655,8 +797,6 @@ class MainActivity : Activity(), SensorEventListener {
         val r0 = s * yw0; val r1 = s * yw1; val r2 = s * yw2
         val u0 = -s * xw0; val u1 = -s * xw1; val u2 = -s * xw2
 
-        val now = SystemClock.uptimeMillis()
-
         if (needLevelRef) {
             // 水平面上、目前面向的方向當正前方
             val yaw = atan2(f0, f1)
@@ -666,7 +806,8 @@ class MainActivity : Activity(), SensorEventListener {
             refF[0] = sy; refF[1] = cy; refF[2] = 0f
             needLevelRef = false
         }
-        if (recenter || (recenterAt > 0 && now >= recenterAt)) {
+        val at = recenterAt
+        if (recenter || (at > 0 && SystemClock.uptimeMillis() >= at)) {
             // 目前頭的完整方向當正前方(躺著看天花板也可以)
             refR[0] = r0; refR[1] = r1; refR[2] = r2
             refU[0] = u0; refU[1] = u1; refU[2] = u2
@@ -674,31 +815,49 @@ class MainActivity : Activity(), SensorEventListener {
             recenter = false
             recenterAt = 0L
             renderer.showHud = false
+            redraw()
         }
 
         if (VrRenderer.isSphere(renderer.mode)) {
-            // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先
-            renderer.head = floatArrayOf(
-                dot(refR, r0, r1, r2), dot(refU, r0, r1, r2), dot(refF, r0, r1, r2),
-                dot(refR, u0, u1, u2), dot(refU, u0, u1, u2), dot(refF, u0, u1, u2),
-                dot(refR, f0, f1, f2), dot(refU, f0, f1, f2), dot(refF, f0, f1, f2)
-            )
+            // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先;兩份陣列輪流寫,不產生新物件
+            headIdx = 1 - headIdx
+            val h = headBuf[headIdx]
+            h[0] = dot(refR, r0, r1, r2); h[1] = dot(refU, r0, r1, r2); h[2] = dot(refF, r0, r1, r2)
+            h[3] = dot(refR, u0, u1, u2); h[4] = dot(refU, u0, u1, u2); h[5] = dot(refF, u0, u1, u2)
+            h[6] = dot(refR, f0, f1, f2); h[7] = dot(refU, f0, f1, f2); h[8] = dot(refF, f0, f1, f2)
+            renderer.head = h
+            redraw()   // 球面模式畫面跟著頭轉
         }
 
-        // 視線在參考座標中的左右角度與低頭角度
-        val az = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
-        val down = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        // 視線在參考座標中的左右角度與低頭角度,交給主執行緒處理面板
+        sensorAz = atan2(dot(refR, f0, f1, f2), dot(refF, f0, f1, f2))
+        sensorDown = -asin(dot(refU, f0, f1, f2).coerceIn(-1f, 1f))
+        if (!menuStepPosted) {
+            menuStepPosted = true
+            handler.post(menuStep)
+        }
+    }
+
+    /** 主執行緒:依最新的頭部角度開關面板、移動紅點、處理注視 */
+    private val menuStep = Runnable {
+        menuStepPosted = false
+        if (!vrMode) return@Runnable
+        val az = sensorAz
+        val down = sensorDown
         lastAz = az
+        // 面板打開時畫面不動,紅點才不會因為網頁忙著轉畫面而亂飄
+        if (renderer.mode == VrRenderer.MODE_YT && !menuOpen) youtubeLook(az, down)
 
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
         val lying = VrMenu.lying
         val tilt = if (lying) -down else down
         val sphere = VrRenderer.isSphere(renderer.mode)
-        val openAt = if (!lying) SIT_OPEN else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
-        val closeAt = if (!lying) SIT_CLOSE else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
+        val yt = renderer.mode == VrRenderer.MODE_YT
+        val openAt = if (!lying) SIT_OPEN else if (yt) LIE_OPEN_YT else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
+        val closeAt = if (!lying) SIT_CLOSE else if (yt) LIE_CLOSE_YT else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
         if (!menuOpen && tilt > openAt) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
-        if (!menuOpen) return
+        if (!menuOpen) return@Runnable
 
         var dYaw = az - menuAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
@@ -708,9 +867,41 @@ class MainActivity : Activity(), SensorEventListener {
         val dir = if (lying) -1f else 1f
         val ty = (VrMenu.START_Y + dir * (tilt - openAt) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
             .coerceIn(VrMenu.Y0, VrMenu.Y1)
-        renderer.cursorX += (tx - renderer.cursorX) * SMOOTH
-        renderer.cursorY += (ty - renderer.cursorY) * SMOOTH
-        updateMenu(SystemClock.uptimeMillis())
+        // 依經過時間平滑,不受感應器頻率影響
+        val now = SystemClock.uptimeMillis()
+        val dt = ((now - lastCursorAt).coerceIn(1L, 100L)) / 1000f
+        lastCursorAt = now
+        val k = 1f - kotlin.math.exp(-dt / CURSOR_TAU)
+        renderer.cursorX += (tx - renderer.cursorX) * k
+        renderer.cursorY += (ty - renderer.cursorY) * k
+        updateMenu(now)
+        redraw()
+    }
+
+    // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 30 次,沒變就不送)
+    private var ytFov = 100f
+    private var ytHalf = true          // VR180(只有前方半圈,左右要限制);360 影片不限制左右
+    private var lastYtAt = 0L
+    private var lastYtYaw = 999f
+    private var lastYtPitch = 999f
+
+    private fun youtubeLook(az: Float, down: Float) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastYtAt < 33) return
+        // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
+        var yaw = -Math.toDegrees(az.toDouble()).toFloat()
+        var pitch = -Math.toDegrees(down.toDouble()).toFloat()
+        // 轉到影片邊緣就停住(YouTube 超出範圍時會把畫面彈回來)。
+        // YouTube 的 fov 是垂直視野,水平視野依播放器比例(約 16:9)換算
+        val vHalf = ytFov / 2f
+        val hHalf = Math.toDegrees(kotlin.math.atan(kotlin.math.tan(Math.toRadians(vHalf.toDouble())) * 16.0 / 9.0)).toFloat()
+        if (ytHalf) yaw = yaw.coerceIn(-(90f - hHalf).coerceAtLeast(0f), (90f - hHalf).coerceAtLeast(0f))
+        pitch = pitch.coerceIn(-(90f - vHalf).coerceAtLeast(0f), (90f - vHalf).coerceAtLeast(0f))
+        if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
+        lastYtAt = now
+        lastYtYaw = yaw
+        lastYtPitch = pitch
+        presentation?.youtubeLook(yaw, pitch, ytFov)
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
@@ -731,6 +922,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.settingsPage = false
         menu.dwell = 0f
         dwellDone = false
+        redraw()
         if (open) {
             menu.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
             menu.volumeMax = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -806,7 +998,6 @@ class MainActivity : Activity(), SensorEventListener {
                 refreshSettingRows()
                 menu.settingsPage = true
             }
-            VrMenu.SET_BACK -> menu.settingsPage = false
             else -> when {
                 target >= VrMenu.SET_MINUS -> {
                     adjustSetting(VrMenu.setIndex(target), if (VrMenu.isSetMinus(target)) -1 else 1)
@@ -820,6 +1011,43 @@ class MainActivity : Activity(), SensorEventListener {
         }
         handler.postDelayed({ pollStatus() }, 300)
         redrawPanel(force = true)
+    }
+
+    // ---------------- 畫面中央提示 ----------------
+
+    private val msgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        textSize = VrRenderer.HUD * 0.17f
+        isFakeBoldText = true
+        color = 0xFFFFFFFF.toInt()
+    }
+
+    private val hideMsg = Runnable { hideMessage() }
+
+    /** 畫面正中央的提示(兩行);hideAfter > 0 時自動消失 */
+    private fun showMessage(line1: String, line2: String, hideAfter: Long = 0L) {
+        handler.removeCallbacks(hideMsg)
+        renderer.updateHud { b ->
+            b.eraseColor(0)
+            val c = Canvas(b)
+            val h = VrRenderer.HUD.toFloat()
+            msgPaint.color = 0xCC000000.toInt()
+            c.drawCircle(h / 2, h / 2, h / 2 - 4, msgPaint)
+            msgPaint.color = 0xFFFFFFFF.toInt()
+            if (line2.isEmpty()) c.drawText(line1, h / 2, h / 2 + msgPaint.textSize * 0.35f, msgPaint)
+            else {
+                c.drawText(line1, h / 2, h / 2 - msgPaint.textSize * 0.25f, msgPaint)
+                c.drawText(line2, h / 2, h / 2 + msgPaint.textSize * 0.95f, msgPaint)
+            }
+        }
+        renderer.showHud = true
+        if (hideAfter > 0) handler.postDelayed(hideMsg, hideAfter)
+    }
+
+    private fun hideMessage() {
+        handler.removeCallbacks(hideMsg)
+        if (recenterAt == 0L) renderer.showHud = false
+        redraw()
     }
 
     // ---------------- 置中倒數 ----------------
@@ -902,14 +1130,21 @@ class MainActivity : Activity(), SensorEventListener {
         glView.onResume()
         val s = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        s?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
+        // 感應器在背景執行緒接收,不佔用主執行緒(網頁與面板)
+        val t = HandlerThread("VR-Sensor").also { it.start() }
+        sensorThread = t
+        s?.let { sensorManager.registerListener(this, it, SENSOR_PERIOD_US, Handler(t.looper)) }
+        redraw()
         ticking = true
         handler.post(tick)
+        checkUpdateSoon()
     }
 
     override fun onPause() {
         presentation?.currentUrl?.let { prefs.edit().putString("url", it).apply() }
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
         ticking = false
         handler.removeCallbacks(tick)
         glView.onPause()
