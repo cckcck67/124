@@ -75,6 +75,8 @@ class WebPresentation(
 
     /** App 內建頁面(首頁、空中遊覽)要用的 Google 金鑰;由 MainActivity 提供 */
     var appKey: () -> String = { "" }
+    /** 網頁影片進入 / 離開全螢幕 */
+    var onFullscreen: (Boolean) -> Unit = {}
     /** App 內建頁面的指令(網址 vrweb://指令),例如 vrweb://key = 設定金鑰 */
     var onAppCommand: (String) -> Unit = {}
 
@@ -196,9 +198,11 @@ class WebPresentation(
                 customView = view
                 customCallback = callback
                 root.addView(view, pageParams())
+                onFullscreen(true)
             }
             override fun onHideCustomView() {
                 removeCustomView()
+                onFullscreen(false)
             }
         }
 

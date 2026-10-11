@@ -947,6 +947,7 @@ class MainActivity : Activity(), SensorEventListener {
         presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
+            it.onFullscreen = { on -> onWebFullscreen(on) }
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -1070,21 +1071,99 @@ class MainActivity : Activity(), SensorEventListener {
             handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
             return
         }
-        // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
-        val onYouTube = WebPresentation.isYouTube(p.currentUrl)
-        p.youtubeSpherical { proj ->
-            val yt = proj.isNotEmpty()
-            ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
-            // 環顧要用電腦版播放器:切換身分並重新載入,回到原本的播放位置(離開 VR 再換回手機版)
-            if (yt && onYouTube && !p.youTubeDesktop) {
-                p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
+        // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
+        // 先在背景直接問 YouTube 這部影片的格式(最準);問不到再從網頁裡判斷
+        val url = p.currentUrl
+        if (WebPresentation.isYouTube(url)) {
+            youtubeProjection(url) { proj ->
+                if (proj != null) applyYouTubeProjection(p, proj)
+                else p.youtubeSpherical { applyYouTubeProjection(p, it) }
             }
-            if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
-            else detectByAspect(p)
-            // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)
-            if (onYouTube) handler.postDelayed({
-                if (vrMode) showMessage(if (yt) "環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
-            }, ENTER_DELAY_MS + 300)
+            return
+        }
+        detectByAspect(p)
+    }
+
+    /** 依 YouTube 影片格式選模式:VR 影片 → 環顧(換成電腦版播放器);一般影片 → 依比例判斷 */
+    private fun applyYouTubeProjection(p: WebPresentation, proj: String) {
+        val yt = proj.isNotEmpty()
+        ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
+        if (yt) {
+            // 環顧要用電腦版播放器:切換身分並重新載入,回到原本的播放位置(離開 VR 再換回手機版)
+            if (!p.youTubeDesktop) p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
+            if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
+        } else detectByAspect(p)
+        // 告訴使用者偵測結果(等置中倒數結束再顯示)
+        handler.postDelayed({
+            if (vrMode) showMessage(if (yt) "環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
+        }, ENTER_DELAY_MS + 300)
+    }
+
+    // ---------------- YouTube 影片格式 ----------------
+
+    private val projCache = HashMap<String, String>()
+
+    /** 網址中的 YouTube 影片編號;不是影片頁回傳 null */
+    private fun youtubeId(url: String?): String? {
+        if (!WebPresentation.isYouTube(url)) return null
+        val u = Uri.parse(url)
+        u.getQueryParameter("v")?.let { return it }
+        val seg = u.pathSegments
+        if (u.host == "youtu.be") return seg.firstOrNull()
+        if (seg.size >= 2 && seg[0] in listOf("shorts", "embed", "live")) return seg[1]
+        return null
+    }
+
+    /**
+     * 背景向 YouTube 查影片格式:"MESH" = VR180、"EQUIRECTANGULAR" = 360、"" = 一般影片;
+     * 查不到(沒網路等)回傳 null。結果會記住,同一部影片只查一次。
+     */
+    private fun youtubeProjection(url: String?, cb: (String?) -> Unit) {
+        val id = youtubeId(url) ?: return cb("")
+        projCache[id]?.let { return cb(it) }
+        Thread {
+            val r = try {
+                val c = java.net.URL("https://www.youtube.com/watch?v=" + Uri.encode(id) + "&hl=en")
+                    .openConnection() as java.net.HttpURLConnection
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                c.setRequestProperty("Accept-Language", "en")
+                c.connectTimeout = 10000
+                c.readTimeout = 15000
+                val html = c.inputStream.bufferedReader().use { it.readText() }
+                if (!html.contains("\"streamingData\"")) null   // 沒拿到播放資料,改用網頁判斷
+                else Regex("\"projectionType\":\"(\\w+)\"").findAll(html)
+                    .map { it.groupValues[1] }.firstOrNull { it != "RECTANGULAR" } ?: ""
+            } catch (e: Exception) { null }
+            handler.post {
+                if (r != null) projCache[id] = r
+                cb(r)
+            }
+        }.start()
+    }
+
+    /**
+     * 網頁影片全螢幕:轉成橫式;YouTube 的 360 / VR180 影片先換成電腦版播放器,
+     * 進 VR 就能直接轉頭環顧(一般影片不受影響,不會重新載入)
+     */
+    private fun onWebFullscreen(on: Boolean) {
+        if (vrMode) return
+        val p = presentation
+        if (on) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            val url = p?.currentUrl
+            if (p != null && screen == SCREEN_WEB && WebPresentation.isYouTube(url) && !p.youTubeDesktop) {
+                youtubeProjection(url) { proj ->
+                    if (!proj.isNullOrEmpty() && !vrMode) {
+                        ytHalf = proj == "MESH"
+                        p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
+                        toast("VR 影片:已換成可以轉頭的播放器,按 VR 即可環顧")
+                    }
+                }
+            }
+        } else if (p?.youTubeDesktop != true) {
+            // 離開全螢幕就跟著手機方向(剛換成電腦版播放器時維持橫式,方便接著進 VR)
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         }
     }
 
@@ -1450,6 +1529,7 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FLY_PAUSE -> { p.run("window.vrFlight&&vrFlight('pause')"); menu.flyPaused = !menu.flyPaused }
             VrMenu.BTN_FLY_RESTART -> p.run("window.vrFlight&&vrFlight('restart')")
             VrMenu.BTN_FLY_NEXT -> p.run("window.vrFlight&&vrFlight('next')")
+            VrMenu.BTN_FLY_LAND -> p.run("window.vrFlight&&vrFlight('land')")
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
@@ -1570,9 +1650,13 @@ class MainActivity : Activity(), SensorEventListener {
                 val o = try { if (r == null || r == "null") null else org.json.JSONObject(r) } catch (e: Exception) { null }
                 menu.hasVideo = false
                 menu.flyPaused = o?.optBoolean("paused") == true
+                menu.flyLanded = o?.optBoolean("landed") == true
                 menu.infoText = if (o == null) "空中遊覽:請先在 2D 畫面選擇目的地" else
-                    "空中遊覽  " + o.optString("name") +
-                        (if (o.optBoolean("arrived")) "  已抵達" else "") + (if (menu.flyPaused) "  已暫停" else "")
+                    "空中遊覽  " + o.optString("name") + when {
+                        menu.flyLanded -> "  已降落(街景)"
+                        o.optBoolean("arrived") -> "  已抵達"
+                        else -> ""
+                    } + (if (menu.flyPaused && !menu.flyLanded) "  已暫停" else "")
                 redrawPanel(force = true)
             }
             return

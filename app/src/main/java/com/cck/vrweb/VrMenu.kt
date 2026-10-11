@@ -54,13 +54,15 @@ class VrMenu {
         const val BTN_FLY_PAUSE = 7      // 空中遊覽:暫停 / 繼續
         const val BTN_FLY_RESTART = 8    //           重新飛這一段
         const val BTN_FLY_NEXT = 9       //           換一個方向接近
+        const val BTN_FLY_LAND = 10      //           降落到街景 / 起飛
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
-            "暫停", "重飛", "換角度")
+            "暫停", "重飛", "換角度", "降落")
 
         /** 影片(網頁、我的影片)用的按鈕 */
         val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
         /** 空中遊覽用的按鈕(設定也是空中遊覽自己的,和影片分開) */
-        val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_RESTART, BTN_FLY_NEXT, BTN_RECENTER, BTN_SETTINGS)
+        val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_RESTART, BTN_FLY_NEXT,
+            BTN_FLY_LAND, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧")
@@ -101,6 +103,7 @@ class VrMenu {
     var buttons = VIDEO_BUTTONS     // 目前顯示的按鈕(依功能切換)
     var infoText: String? = null    // 資訊列文字;null = 顯示影片時間
     var flyPaused = false
+    var flyLanded = false
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
@@ -277,6 +280,7 @@ class VrMenu {
                 BTN_POSTURE -> if (lying) "躺平" else "坐姿"
                 BTN_MODE -> MODE_NAMES[mode]
                 BTN_FLY_PAUSE -> if (flyPaused) "繼續" else "暫停"
+                BTN_FLY_LAND -> if (flyLanded) "起飛" else "降落"
                 else -> LABELS[id]
             }
             centerText.color = if (popup != NONE && popup != id) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
