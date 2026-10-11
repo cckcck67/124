@@ -1052,8 +1052,14 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showHud = false
         hideKeyboard()
         hideSystemBars()
-        // 離開 VR 時上層 VR 播放器留著(維持橫式),按返回才關掉
-        if (!on && presentation?.vrPlayerOpen == true) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        if (!on) presentation?.let { p ->
+            when {
+                // 上層 VR 播放器留著(維持橫式),按返回才關掉
+                p.vrPlayerOpen -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                // 一般影片在全螢幕中:離開全螢幕、停在目前的時間點(和 VR 播放器一樣回到網頁)
+                screen == SCREEN_WEB && p.isFullscreen -> { p.exitFullscreen(); p.pauseAll() }
+            }
+        }
         if (on) {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方

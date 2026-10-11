@@ -91,12 +91,19 @@ class WebPresentation(
 
     // ---------------- 上層 VR 播放器 ----------------
 
-    /** 蓋在原本網頁上方的 VR 播放器(YouTube 官方嵌入播放器);原本的網頁留在下面不動 */
+    /**
+     * 蓋在原本網頁上方的 VR 播放器(YouTube 官方嵌入播放器);原本的網頁留在下面不動。
+     * 關掉時只隱藏、下次重複使用(不在它自己的回呼裡銷毀,避免之後無法再開)
+     */
     private var overlay: WebView? = null
-    val vrPlayerOpen get() = overlay != null
+    var vrPlayerOpen = false
+        private set
 
     /** 面板、轉頭等操作的對象:有上層播放器時操作它,否則操作原本的網頁 */
-    private val active: WebView get() = overlay ?: webView
+    private val active: WebView get() = overlay?.takeIf { vrPlayerOpen } ?: webView
+
+    /** 原本網頁的影片是否在全螢幕 */
+    val isFullscreen get() = customView != null
 
     @SuppressLint("SetJavaScriptEnabled")
     fun openVrPlayer(videoId: String, startSec: Double) {
@@ -122,16 +129,21 @@ class WebPresentation(
             root.addView(w, pageParams())
             overlay = w
         }
+        w.bringToFront()
+        w.visibility = View.VISIBLE
+        vrPlayerOpen = true
         w.loadUrl("$APP_ORIGIN/assets/ytvr.html?v=" + android.net.Uri.encode(videoId) + "&t=" + startSec)
     }
 
     /** 關掉上層播放器,回傳看到的時間點(秒;拿不到為 -1) */
     fun closeVrPlayer(cb: (Double) -> Unit) {
-        val w = overlay ?: return cb(-1.0)
+        val w = overlay
+        if (w == null || !vrPlayerOpen) return cb(-1.0)
+        vrPlayerOpen = false
         w.evaluateJavascript("(function(){$FIND_VIDEO return v?v.currentTime:-1;})()") { r ->
-            root.removeView(w)
-            w.destroy()
-            if (overlay === w) overlay = null
+            // 停止播放並隱藏,留著下次用
+            w.loadUrl("about:blank")
+            w.visibility = View.GONE
             cb(r?.toDoubleOrNull() ?: -1.0)
         }
     }
@@ -404,10 +416,9 @@ class WebPresentation(
      * 空中遊覽頁面用 vrLook(向右為正, 向上為正);YouTube 用播放器的 setSphericalProperties。
      */
     fun lookAt(yaw: Float, pitch: Float, fov: Float) {
-        js("(function(){if(window.vrLook){vrLook(${-yaw},$pitch,$fov);return;}" +
-            "var mp=document.getElementById('movie_player');" +
-            "if(mp&&mp.setSphericalProperties)mp.setSphericalProperties({yaw:${(yaw + 360f) % 360f}," +
-            "pitch:$pitch,roll:0,fov:$fov});})()")
+        // 電腦版 YouTube 頁面(禁止嵌入時的備用)沒有 vrLook:先裝上和 VR 播放器相同的邊界處理
+        js("(function(){if(!window.vrLook){$LOOK_SHIM}" +
+            "if(window.vrLook)vrLook(${-yaw},$pitch,$fov);})()")
     }
 
     /**
@@ -498,6 +509,7 @@ class WebPresentation(
     fun release() {
         overlay?.destroy()
         overlay = null
+        vrPlayerOpen = false
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.destroy()
@@ -510,6 +522,25 @@ private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
     "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});" +
     "if(!v&&window.vrMedia)v=window.vrMedia;"   // VR 播放器(官方嵌入播放器)
+
+// 電腦版 YouTube 頁面用的 vrLook(和 ytvr.html 相同):設定方向後讀回實際方向,
+// 被彈回原點或卡在邊緣就把那裡記成邊界,之後停在邊界不再超過
+private const val LOOK_SHIM =
+    "var mp=document.getElementById('movie_player');if(!mp||!mp.setSphericalProperties)return;" +
+    "var lim={lo:-180,hi:180,plo:-90,phi:90},pend=null,okY=0,okP=0,missY=0,lastAy=0;" +
+    "function sg(a){a=((a%360)+360)%360;return a>180?a-360:a;}" +
+    "function cl(v,a,b){return Math.max(a,Math.min(b,v));}" +
+    "window.vrLook=function(right,up,fov){" +
+    "if(pend&&mp.getSphericalProperties){var s=mp.getSphericalProperties()||{};" +
+    "if(typeof s.yaw==='number'){var ay=sg(s.yaw);" +
+    "if(Math.abs(ay-pend.y)<=4){okY=pend.y;missY=0;}" +
+    "else if(Math.abs(ay)<2&&Math.abs(pend.y)>8){if(pend.y>0)lim.hi=Math.max(0,okY);else lim.lo=Math.min(0,okY);missY=0;}" +
+    "else if(++missY>=3&&Math.abs(ay-lastAy)<1.5){if(pend.y>0)lim.hi=Math.max(0,ay);else lim.lo=Math.min(0,ay);missY=0;}" +
+    "lastAy=ay;}" +
+    "if(typeof s.pitch==='number'){if(Math.abs(s.pitch-pend.p)<=4)okP=pend.p;" +
+    "else if(Math.abs(s.pitch)<2&&Math.abs(pend.p)>8){if(pend.p>0)lim.phi=Math.max(0,okP);else lim.plo=Math.min(0,okP);}}}" +
+    "var y=cl(-right,lim.lo,lim.hi),p=cl(up,lim.plo,lim.phi);" +
+    "var o={yaw:(y+360)%360,pitch:p,roll:0};if(fov)o.fov=fov;mp.setSphericalProperties(o);pend={y:y,p:p};};"
 
 // 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
 private const val BLOCK_ORIENTATION =
