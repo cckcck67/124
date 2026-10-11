@@ -32,8 +32,18 @@ import org.json.JSONObject
  */
 class WebPresentation(
     outer: Context, display: Display,
-    private val screenW: Int, private val screenH: Int   // 虛擬螢幕像素大小(依畫質)
+    private var screenW: Int, private var screenH: Int   // 網頁大小(像素);虛擬螢幕是正方形,網頁在左上角
 ) : Presentation(outer, display) {
+
+    /** 改變網頁大小(直式 / 橫式):只重新排版,不會重新載入 */
+    fun setPageSize(w: Int, h: Int) {
+        screenW = w
+        screenH = h
+        if (!::root.isInitialized) return
+        for (i in 0 until root.childCount) root.getChildAt(i).layoutParams = pageParams()
+    }
+
+    private fun pageParams() = FrameLayout.LayoutParams(screenW, screenH, android.view.Gravity.TOP or android.view.Gravity.START)
 
     companion object {
         const val APP_ORIGIN = "https://appassets.androidplatform.net"
@@ -164,16 +174,14 @@ class WebPresentation(
                 removeCustomView()
                 customView = view
                 customCallback = callback
-                root.addView(view, FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                root.addView(view, pageParams())
             }
             override fun onHideCustomView() {
                 removeCustomView()
             }
         }
 
-        root.addView(webView, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(webView, pageParams())
         setContentView(root)
 
         pendingUrl?.let { applyUa(it); webView.loadUrl(it) }
@@ -300,6 +308,14 @@ class WebPresentation(
             cb(it?.trim('"')?.takeIf { s -> s != "null" } ?: "")
         }
     }
+
+    /** 暫停網頁裡所有影片(回首頁時) */
+    fun pauseAll() {
+        js("document.querySelectorAll('video').forEach(function(v){v.pause();})")
+    }
+
+    /** 執行網頁裡的程式(空中遊覽的指令等),回傳結果字串 */
+    fun run(code: String, cb: ((String?) -> Unit)? = null) = js(code, cb)
 
     /**
      * 環顧模式看的方向(度):yaw 為 YouTube 的方向(頭右轉 = 減少)、pitch 向上為正,fov = 視野。

@@ -47,16 +47,21 @@ class Updater(private val activity: Activity, private val onDialogClosed: () -> 
         else @Suppress("DEPRECATION") info.versionCode.toLong()
     }
 
-    /** 背景檢查;有新版才跳出詢問,沒有或連不上就安靜結束 */
-    fun check() {
+    /**
+     * 背景檢查;有新版才跳出詢問。
+     * manual = true(設定頁的「檢查更新」)時,沒有新版或連不上也會告訴使用者。
+     */
+    fun check(manual: Boolean = false) {
         Thread {
             try {
                 val json = JSONObject(download(VERSION_URL).toString(Charsets.UTF_8))
                 val code = json.optLong("code")
                 val name = json.optString("name")
                 if (code > currentVersion()) main.post { ask(name) }
+                else if (manual) main.post { Toast.makeText(activity, "已經是最新版本", Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
-                // 沒網路或還沒有發佈版本:略過
+                // 沒網路或還沒有發佈版本:自動檢查時略過
+                if (manual) main.post { Toast.makeText(activity, "無法檢查更新,請確認網路", Toast.LENGTH_SHORT).show() }
             }
         }.start()
     }

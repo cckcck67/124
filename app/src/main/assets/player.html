@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的影片</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #t { position: fixed; left: 0; right: 0; top: 2vh; text-align: center; color: #fff; font: 4vh sans-serif;
+       text-shadow: 0 0 1vh #000; pointer-events: none; transition: opacity 2s; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #fd4; font: 4vh sans-serif; text-align: center; padding: 0 5vw; }
+</style>
+</head>
+<body>
+<video id="v" controls autoplay playsinline></video>
+<div id="t"></div>
+<div id="err"></div>
+<script>
+  var q = new URLSearchParams(location.search);
+  var v = document.getElementById('v'), t = document.getElementById('t');
+  t.textContent = q.get('t') || '';
+  setTimeout(function () { t.style.opacity = 0; }, 4000);
+  v.onerror = function () {
+    var e = document.getElementById('err');
+    e.textContent = '無法播放這部影片(格式不支援或檔案已移除)';
+    e.style.display = 'flex';
+  };
+  v.src = q.get('v');
+</script>
+</body>
+</html>
