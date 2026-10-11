@@ -248,7 +248,7 @@ class VrRenderer(
     // ---- 立體照(暫停畫面 + 深度圖) ----
     @Volatile var photoOn = false
     @Volatile var photoShowDepth = false  // 顯示深度圖(檢查用)
-    @Volatile var photoStrength = 0.05f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
+    @Volatile var photoStrength = 0.08f   // 最近與最遠的左右錯開量(佔畫面寬度比例)
     private var photoTex = 0
     private var depthTex = 0
     private var photoFbo = 0

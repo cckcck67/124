@@ -35,22 +35,25 @@ class WebPresentation(
 ) : Presentation(outer, display) {
 
     companion object {
-        /** YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用手機版 Chrome 的身分 */
+        /**
+         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用電腦版 Chrome 的身分
+         * (電腦版播放器才能用程式控制 VR 影片看的方向)
+         */
         fun isYouTube(url: String?): Boolean {
             val host = try { android.net.Uri.parse(url ?: return false).host ?: return false } catch (e: Exception) { return false }
             return host == "youtu.be" || host == "youtube.com" || host.endsWith(".youtube.com")
         }
 
-        /** 手機版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
+        /** 電腦版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
         fun chromeUserAgent(base: String): String {
             val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
-            return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/$major.0.0.0 Mobile Safari/537.36"
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/$major.0.0.0 Safari/537.36"
         }
     }
 
     private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
-    private var chromeUa = ""    // YouTube:手機版 Chrome
+    private var chromeUa = ""    // YouTube:電腦版 Chrome
 
     /** 依要前往的網址切換身分;有改變回傳 true(之後的載入才會套用) */
     private fun applyUa(url: String?): Boolean {

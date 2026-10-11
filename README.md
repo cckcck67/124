@@ -26,7 +26,8 @@
 猜錯可用面板「模式」改。
 
 **YouTube VR 影片(YT環顧)**:YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,
-所以開 YouTube 時 App 自動改用手機版 Chrome 的身分,拿到真正的 VR 影片。
+所以開 YouTube 時 App 自動改用電腦版 Chrome 的身分,拿到真正的 VR 影片。
+進入 VR 倒數結束後,畫面中央會顯示偵測結果(YT環顧 / YouTube 平面影片)。
 YouTube 網頁版的 VR 影片只有單眼,所以是「轉頭環顧四周」,沒有立體深度:
 App 把頭的方向傳給 YouTube 播放器,由 YouTube 轉好畫面,兩眼看同一張。
 設定的「YT視野」調到轉頭時景物不會跟著跑(預設 100 度)。

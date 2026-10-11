@@ -302,7 +302,7 @@ class MainActivity : Activity(), SensorEventListener {
         },
         Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
-        Setting("photo2", "立體照強度", 0.005f, 0f, 0.12f, "%.3f", { 0.05f }) { renderer.photoStrength = it },
+        Setting("photo3", "立體照強度", 0.005f, 0f, 0.2f, "%.3f", { 0.08f }) { renderer.photoStrength = it },
     ) }
 
     private val sphereSettings by lazy { listOf(
@@ -318,7 +318,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     // YouTube 環顧:平面顯示的設定 + YouTube 視野(立體照不適用)
     private val ytSettings by lazy {
-        flatSettings.filter { it.key != "photo2" } +
+        flatSettings.filter { it.key != "photo3" } +
             Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
     }
 
@@ -642,9 +642,14 @@ class MainActivity : Activity(), SensorEventListener {
     private fun autoDetectMode() {
         val p = presentation ?: return
         // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
+        val onYouTube = WebPresentation.isYouTube(p.currentUrl)
         p.youtubeSpherical { yt ->
             if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
             else detectByAspect(p)
+            // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)
+            if (onYouTube) handler.postDelayed({
+                if (vrMode) showMessage(if (yt) "YT環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
+            }, ENTER_DELAY_MS + 300)
         }
     }
 
