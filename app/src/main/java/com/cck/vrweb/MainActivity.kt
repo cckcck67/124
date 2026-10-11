@@ -571,10 +571,25 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 直式 / 橫式 ----------------
 
-    /** 網頁大小跟著手機方向(VR 一律橫式);只改排版,網頁不會重新載入 */
+    /** 螢幕長邊 / 短邊(小米9 約 2.17);拿不到時用 16:9 */
+    private fun screenRatio(): Float {
+        val (w, h) = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) windowManager.currentWindowMetrics.bounds.let { it.width() to it.height() }
+            else android.util.DisplayMetrics().also {
+                @Suppress("DEPRECATION") windowManager.defaultDisplay.getRealMetrics(it)
+            }.let { it.widthPixels to it.heightPixels }
+        } catch (e: Exception) { 16 to 9 }
+        if (w <= 0 || h <= 0) return 16f / 9f
+        return (maxOf(w, h).toFloat() / minOf(w, h)).coerceIn(1.3f, 2.4f)
+    }
+
+    /**
+     * 網頁大小跟著手機方向與螢幕比例,填滿整個螢幕(VR 一律橫式 16:9);
+     * 只改排版,網頁不會重新載入
+     */
     private fun updatePageSize() {
         val long = QUALITY_W[quality]
-        val short = long * 9 / 16
+        val short = if (vrMode) long * 9 / 16 else (long / screenRatio()).toInt()
         val portrait = !vrMode &&
                 resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
         pageW = if (portrait) short else long
@@ -1031,6 +1046,10 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.showHud = false
         hideKeyboard()
         hideSystemBars()
+        if (!on) presentation?.let { p ->
+            // YouTube 環顧時換成電腦版的,離開 VR 換回手機版排版
+            if (p.youTubeDesktop) p.videoStatus { st -> p.setYouTubeDesktop(false, st?.current ?: -1.0) }
+        }
         if (on) {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
@@ -1056,6 +1075,10 @@ class MainActivity : Activity(), SensorEventListener {
         p.youtubeSpherical { proj ->
             val yt = proj.isNotEmpty()
             ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
+            // 環顧要用電腦版播放器:切換身分並重新載入,回到原本的播放位置(離開 VR 再換回手機版)
+            if (yt && onYouTube && !p.youTubeDesktop) {
+                p.videoStatus { st -> p.setYouTubeDesktop(true, st?.current ?: -1.0) }
+            }
             if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
             else detectByAspect(p)
             // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)

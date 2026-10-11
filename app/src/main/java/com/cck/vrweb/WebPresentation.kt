@@ -52,20 +52,25 @@ class WebPresentation(
         fun isFlight(url: String?) = url?.startsWith("$APP_ORIGIN/assets/flight.html") == true
 
         /**
-         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 改用電腦版 Chrome 的身分
-         * (電腦版播放器才能用程式控制 VR 影片看的方向)
+         * YouTube 會把 App 內網頁的 VR 影片降級成平面 360p,所以 YouTube 平常用手機版 Chrome 的身分
+         * (正常的手機版排版);只有 VR 環顧時才切到電腦版(電腦版播放器才能用程式控制看的方向)
          */
         fun isYouTube(url: String?): Boolean {
             val host = try { android.net.Uri.parse(url ?: return false).host ?: return false } catch (e: Exception) { return false }
             return host == "youtu.be" || host == "youtube.com" || host.endsWith(".youtube.com")
         }
 
-        /** 電腦版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
-        fun chromeUserAgent(base: String): String {
-            val major = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
-            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/$major.0.0.0 Safari/537.36"
-        }
+        private fun chromeMajor(base: String) = Regex("Chrome/(\\d+)").find(base)?.groupValues?.get(1) ?: "120"
+
+        /** 手機版 Chrome 的識別字串;Chrome 版本沿用 WebView 本身的版本 */
+        fun mobileChromeUserAgent(base: String) =
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/${chromeMajor(base)}.0.0.0 Mobile Safari/537.36"
+
+        /** 電腦版 Chrome 的識別字串 */
+        fun desktopChromeUserAgent(base: String) =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/${chromeMajor(base)}.0.0.0 Safari/537.36"
     }
 
     /** App 內建頁面(首頁、空中遊覽)要用的 Google 金鑰;由 MainActivity 提供 */
@@ -79,11 +84,24 @@ class WebPresentation(
     }
 
     private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
-    private var chromeUa = ""    // YouTube:電腦版 Chrome
+    private var mobileUa = ""    // YouTube 平常:手機版 Chrome
+    private var desktopUa = ""   // YouTube VR 環顧:電腦版 Chrome
+
+    /** YouTube 用電腦版身分(VR 環顧時) */
+    var youTubeDesktop = false
+        private set
+
+    /** 切換 YouTube 的身分並重新載入目前網頁,回到原本的播放位置 */
+    fun setYouTubeDesktop(on: Boolean, resumeAt: Double) {
+        if (on == youTubeDesktop) return
+        youTubeDesktop = on
+        val url = currentUrl ?: return
+        if (isYouTube(url)) loadUrl(url, resumeAt)
+    }
 
     /** 依要前往的網址切換身分;有改變回傳 true(之後的載入才會套用) */
     private fun applyUa(url: String?): Boolean {
-        val want = if (isYouTube(url)) chromeUa else appUa
+        val want = if (!isYouTube(url)) appUa else if (youTubeDesktop) desktopUa else mobileUa
         if (webView.settings.userAgentString == want) return false
         webView.settings.userAgentString = want
         return true
@@ -119,7 +137,10 @@ class WebPresentation(
             displayZoomControls = false
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
             appUa = userAgentString.replace("; wv", "")
-            chromeUa = chromeUserAgent(userAgentString)
+            mobileUa = mobileChromeUserAgent(userAgentString)
+            desktopUa = desktopChromeUserAgent(userAgentString)
+            // 字的大小固定 100%,不跟系統字型大小放大(放大會讓網頁排版擠在一起、字被切掉)
+            textZoom = 100
             userAgentString = appUa
         }
         // YouTube:不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制)
@@ -300,9 +321,10 @@ class WebPresentation(
     /** YouTube 的 360 / VR180 影片(網頁版只有單眼,可以控制看的方向) */
     /** 回傳投影格式(MESH = VR180、EQUIRECTANGULAR = 360 …);不是 VR 影片回傳空字串 */
     fun youtubeSpherical(cb: (String) -> Unit) {
+        // 手機版頁面也要能判斷(可能沒有 setSphericalProperties),所以只看影片格式
         js("(function(){var mp=document.getElementById('movie_player');" +
-            "if(!mp||!mp.getPlayerResponse||!mp.setSphericalProperties)return '';" +
-            "var pr=mp.getPlayerResponse()||{},fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],p='';" +
+            "var pr=(mp&&mp.getPlayerResponse&&mp.getPlayerResponse())||window.ytInitialPlayerResponse||{};" +
+            "var fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],p='';" +
             "fs.forEach(function(f){if(!p&&f.projectionType&&f.projectionType!=='RECTANGULAR')p=f.projectionType;});" +
             "return p;})()") {
             cb(it?.trim('"')?.takeIf { s -> s != "null" } ?: "")
