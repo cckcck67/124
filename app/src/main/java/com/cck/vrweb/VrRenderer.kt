@@ -203,7 +203,7 @@ class VrRenderer(
     /** 需要重畫時呼叫(由 MainActivity 設成 glView.requestRender) */
     @Volatile var onDirty: () -> Unit = {}
 
-    /** 4K / 8K 畫質時開啟 Mipmap(手機不支援時自動略過) */
+    /** 4K 畫質時開啟 Mipmap(手機不支援時自動略過) */
     @Volatile var useMipmap = false
 
     private var maxTex = 4096

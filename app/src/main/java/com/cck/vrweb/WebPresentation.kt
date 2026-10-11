@@ -262,12 +262,14 @@ class WebPresentation(
     }
 
     /** YouTube 的 360 / VR180 影片(網頁版只有單眼,可以控制看的方向) */
-    fun youtubeSpherical(cb: (Boolean) -> Unit) {
+    /** 回傳投影格式(MESH = VR180、EQUIRECTANGULAR = 360 …);不是 VR 影片回傳空字串 */
+    fun youtubeSpherical(cb: (String) -> Unit) {
         js("(function(){var mp=document.getElementById('movie_player');" +
-            "if(!mp||!mp.getPlayerResponse||!mp.setSphericalProperties)return false;" +
-            "var pr=mp.getPlayerResponse()||{},fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[];" +
-            "return fs.some(function(f){return f.projectionType&&f.projectionType!=='RECTANGULAR';});})()") {
-            cb(it == "true")
+            "if(!mp||!mp.getPlayerResponse||!mp.setSphericalProperties)return '';" +
+            "var pr=mp.getPlayerResponse()||{},fs=(pr.streamingData&&pr.streamingData.adaptiveFormats)||[],p='';" +
+            "fs.forEach(function(f){if(!p&&f.projectionType&&f.projectionType!=='RECTANGULAR')p=f.projectionType;});" +
+            "return p;})()") {
+            cb(it?.trim('"')?.takeIf { s -> s != "null" } ?: "")
         }
     }
 

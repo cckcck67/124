@@ -14,7 +14,6 @@ import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioManager
-import android.media.MediaCodecList
 import android.net.Uri
 import android.opengl.GLSurfaceView
 import android.os.Build
@@ -52,12 +51,11 @@ class MainActivity : Activity(), SensorEventListener {
 
     companion object {
         // 網頁所在虛擬螢幕的畫質(16:9)。DPI 跟著解析度等比例調整,網頁排版都和 1280x720@240 相同
-        val QUALITY_W = intArrayOf(1920, 2560, 3840, 7680)
-        val QUALITY_H = intArrayOf(1080, 1440, 2160, 4320)
-        val QUALITY_DPI = intArrayOf(360, 480, 720, 1440)
-        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K", "8K")
+        val QUALITY_W = intArrayOf(1920, 2560, 3840)
+        val QUALITY_H = intArrayOf(1080, 1440, 2160)
+        val QUALITY_DPI = intArrayOf(360, 480, 720)
+        val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
         const val QUALITY_4K = 2
-        const val QUALITY_8K = 3
 
         /** App 內建首頁 */
         const val HOME_URL = "file:///android_asset/home.html"
@@ -72,6 +70,8 @@ class MainActivity : Activity(), SensorEventListener {
         const val LIE_CLOSE = 0.30f      //       回到約 17 度內關閉
         const val LIE_OPEN_FLAT = 0.349f // 躺平(2D / 左右3D):抬頭約 20 度打開
         const val LIE_CLOSE_FLAT = 0.24f //       回到約 14 度內關閉
+        const val LIE_OPEN_YT = 0.611f   // 躺平(YT環顧):抬頭約 35 度打開(抬頭看影片上方時不會誤開)
+        const val LIE_CLOSE_YT = 0.436f  //       回到約 25 度內關閉
         const val MENU_Y_RANGE = 0.48f   // 面板一端到另一端 = 頭轉約 27 度
         const val OPEN_GRACE_MS = 500L   // 面板剛打開的這段時間不觸發任何按鈕
         const val MENU_YAW_RANGE = 1.35f // 面板左端到右端 = 轉頭約 77 度
@@ -246,40 +246,18 @@ class MainActivity : Activity(), SensorEventListener {
     /** 網址列「畫質」:選好後重新載入目前網頁(回到原本的播放位置) */
     private fun chooseQuality() {
         hideKeyboard()
-        val names = arrayOf("1080p", "1440p(預設)", "4K", "8K(實驗)")
+        val names = arrayOf("1080p", "1440p(預設)", "4K")
         val dlg = AlertDialog.Builder(this)
             .setTitle("畫質(越高越清楚,但越耗電)")
             .setSingleChoiceItems(names, quality) { d, i ->
                 d.dismiss()
-                if (i == QUALITY_8K && quality != QUALITY_8K && !decoderSupports8K()) {
-                    val warn = AlertDialog.Builder(this)
-                        .setTitle("這支手機可能播不了 8K")
-                        .setMessage("手機的影片解碼器不支援 8K,網站多半只會給 4K 或更低的畫質,還可能變卡。要繼續嗎?")
-                        .setPositiveButton("仍要使用") { _, _ -> setQuality(i) }
-                        .setNegativeButton("取消", null)
-                        .create()
-                    warn.setOnDismissListener { hideSystemBars() }
-                    warn.show()
-                } else {
-                    setQuality(i)
-                }
+                setQuality(i)
             }
             .setNegativeButton("取消", null)
             .create()
         dlg.setOnDismissListener { hideSystemBars() }
         dlg.show()
     }
-
-    /** 手機有沒有能解 8K(7680x4320)的影片解碼器 */
-    private fun decoderSupports8K(): Boolean = try {
-        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { ci ->
-            !ci.isEncoder && ci.supportedTypes.any { t ->
-                t.startsWith("video/") && try {
-                    ci.getCapabilitiesForType(t).videoCapabilities?.isSizeSupported(7680, 4320) == true
-                } catch (e: Exception) { false }
-            }
-        }
-    } catch (e: Exception) { false }
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
         this.text = text
@@ -642,7 +620,9 @@ class MainActivity : Activity(), SensorEventListener {
         val p = presentation ?: return
         // YouTube 的 360 / VR180 影片 → YouTube 環顧(轉頭控制 YouTube 看的方向)
         val onYouTube = WebPresentation.isYouTube(p.currentUrl)
-        p.youtubeSpherical { yt ->
+        p.youtubeSpherical { proj ->
+            val yt = proj.isNotEmpty()
+            ytHalf = proj == "MESH"   // YouTube 的 VR180 是 MESH 格式,只有前方半圈
             if (yt) { if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT) }
             else detectByAspect(p)
             // 在 YouTube 上告訴使用者偵測結果(等置中倒數結束再顯示)
@@ -872,8 +852,9 @@ class MainActivity : Activity(), SensorEventListener {
         val lying = VrMenu.lying
         val tilt = if (lying) -down else down
         val sphere = VrRenderer.isSphere(renderer.mode)
-        val openAt = if (!lying) SIT_OPEN else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
-        val closeAt = if (!lying) SIT_CLOSE else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
+        val yt = renderer.mode == VrRenderer.MODE_YT
+        val openAt = if (!lying) SIT_OPEN else if (yt) LIE_OPEN_YT else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
+        val closeAt = if (!lying) SIT_CLOSE else if (yt) LIE_CLOSE_YT else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
         if (!menuOpen && tilt > openAt) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
         if (!menuOpen) return@Runnable
@@ -899,6 +880,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 30 次,沒變就不送)
     private var ytFov = 100f
+    private var ytHalf = true          // VR180(只有前方半圈,左右要限制);360 影片不限制左右
     private var lastYtAt = 0L
     private var lastYtYaw = 999f
     private var lastYtPitch = 999f
@@ -907,8 +889,14 @@ class MainActivity : Activity(), SensorEventListener {
         val now = SystemClock.uptimeMillis()
         if (now - lastYtAt < 33) return
         // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
-        val yaw = -Math.toDegrees(az.toDouble()).toFloat()
-        val pitch = -Math.toDegrees(down.toDouble()).toFloat()
+        var yaw = -Math.toDegrees(az.toDouble()).toFloat()
+        var pitch = -Math.toDegrees(down.toDouble()).toFloat()
+        // 轉到影片邊緣就停住(YouTube 超出範圍時會把畫面彈回來)。
+        // YouTube 的 fov 是垂直視野,水平視野依播放器比例(約 16:9)換算
+        val vHalf = ytFov / 2f
+        val hHalf = Math.toDegrees(kotlin.math.atan(kotlin.math.tan(Math.toRadians(vHalf.toDouble())) * 16.0 / 9.0)).toFloat()
+        if (ytHalf) yaw = yaw.coerceIn(-(90f - hHalf).coerceAtLeast(0f), (90f - hHalf).coerceAtLeast(0f))
+        pitch = pitch.coerceIn(-(90f - vHalf).coerceAtLeast(0f), (90f - vHalf).coerceAtLeast(0f))
         if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
         lastYtAt = now
         lastYtYaw = yaw
