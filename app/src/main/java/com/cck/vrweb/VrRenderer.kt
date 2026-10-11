@@ -194,8 +194,28 @@ class VrRenderer(
     @Volatile var cursorX = 0.5f    // 0~1,原始畫面座標
     @Volatile var cursorY = 0.5f
 
-    /** 影片在網頁畫面中的位置 [x, y, 寬, 高](比例,y 向上);整頁 = [0,0,1,1] */
+    /** 影片在網頁中的位置 [x, y, 寬, 高](佔網頁的比例,y 向上);整頁 = [0,0,1,1] */
     @Volatile var crop = floatArrayOf(0f, 0f, 1f, 1f)
+
+    /**
+     * 網頁在虛擬螢幕中的大小(像素)。虛擬螢幕是正方形,網頁放在左上角,
+     * 直式 / 橫式只要改網頁大小,不用重建虛擬螢幕(網頁不會重新載入)。
+     */
+    @Volatile var pageW = 16
+    @Volatile var pageH = 9
+
+    /** 網頁在材質中的位置 [x, y, 寬, 高](材質比例,y 向上;網頁在虛擬螢幕左上角) */
+    private fun pageRect(): FloatArray {
+        val w = pageW.toFloat() / srcW
+        val h = pageH.toFloat() / srcH
+        return floatArrayOf(0f, 1f - h, w, h)
+    }
+
+    /** 網頁中的一塊(網頁比例)→ 材質中的位置 */
+    private fun toTexture(c: FloatArray): FloatArray {
+        val p = pageRect()
+        return floatArrayOf(p[0] + c[0] * p[2], p[1] + c[1] * p[3], c[2] * p[2], c[3] * p[3])
+    }
 
     /** 球面模式頭部方向:把「相機座標的視線」轉成「影片座標」的 3x3 矩陣(直行優先) */
     @Volatile var head = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
@@ -269,16 +289,16 @@ class VrRenderer(
             position(0)
         }
 
-    /** 將原始畫面等比例塞進 w*h 區域,回傳 [x, y, 寬, 高](置中) */
+    /** 將網頁等比例塞進 w*h 區域,回傳 [x, y, 寬, 高](置中) */
     fun fitRect(w: Float, h: Float): FloatArray {
-        val a = srcW.toFloat() / srcH
+        val a = pageW.toFloat() / pageH
         var rw = w
         var rh = w / a
         if (rh > h) { rh = h; rw = h * a }
         return floatArrayOf((w - rw) / 2f, (h - rh) / 2f, rw, rh)
     }
 
-    /** 改變虛擬螢幕解析度(畫質);比例固定 16:9 */
+    /** 改變虛擬螢幕解析度(畫質;正方形) */
     fun setBufferSize(w: Int, h: Int) {
         srcW = w
         srcH = h
@@ -458,7 +478,8 @@ class VrRenderer(
         if (!vrMode) {
             val r = fitRect(viewW.toFloat(), viewH.toFloat())
             GLES20.glViewport(r[0].toInt(), r[1].toInt(), r[2].toInt(), r[3].toInt())
-            drawVideo(0f, 0f, 1f, 1f, 0f, 0f)
+            val p = pageRect()
+            drawVideo(0f, 0f, p[2], p[3], p[0], p[1])
             return
         }
 
@@ -483,7 +504,7 @@ class VrRenderer(
         val m = mode
         val halfGap = (gap * viewW / 2f).toInt().coerceIn(0, eyeW / 2)
         // 平面 2D 模式看整頁;其他模式只取網頁中的影片區域
-        val c = if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop
+        val c = toTexture(if (m == MODE_2D) floatArrayOf(0f, 0f, 1f, 1f) else crop)
         GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
         for (eye in 0..1) {
             val r = fitRect(eyeW.toFloat(), viewH.toFloat())
@@ -580,12 +601,12 @@ class VrRenderer(
         GLES20.glUniform1f(oShowPanel, if (panel) 1f else 0f)
         GLES20.glUniform2f(oCursor, cursorX, 1f - cursorY)
         GLES20.glUniform1f(oShowCursor, if (cursor) 1f else 0f)
-        GLES20.glUniform1f(oAspect, srcW.toFloat() / srcH)
+        GLES20.glUniform1f(oAspect, pageW.toFloat() / pageH)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, hudTex)
         GLES20.glUniform1i(oHud, 2)
         // 倒數數字:正中央的正方形
-        val hw = HUD_H * srcH / srcW / 2f
+        val hw = HUD_H * pageH / pageW / 2f
         GLES20.glUniform4f(oHudRect, 0.5f - hw, 0.5f - HUD_H / 2f, 0.5f + hw, 0.5f + HUD_H / 2f)
         GLES20.glUniform1f(oShowHud, if (hud) 1f else 0f)
         bindQuad(oPos, oUv)

@@ -51,7 +51,16 @@ class VrMenu {
         const val BTN_MODE = 4
         const val BTN_RECENTER = 5
         const val BTN_SETTINGS = 6
-        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定")
+        const val BTN_FLY_PAUSE = 7      // 空中遊覽:暫停 / 繼續
+        const val BTN_FLY_RESTART = 8    //           重新飛這一段
+        const val BTN_FLY_NEXT = 9       //           換一個方向接近
+        private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
+            "暫停", "重飛", "換角度")
+
+        /** 影片(網頁、我的影片)用的按鈕 */
+        val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
+        /** 空中遊覽用的按鈕(設定也是空中遊覽自己的,和影片分開) */
+        val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_RESTART, BTN_FLY_NEXT, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧")
@@ -89,6 +98,9 @@ class VrMenu {
     var mode = 0            // VrRenderer.MODE_*
     var popup = NONE        // 目前拉出選項的按鈕(BTN_MODE)
     var settingsPage = false
+    var buttons = VIDEO_BUTTONS     // 目前顯示的按鈕(依功能切換)
+    var infoText: String? = null    // 資訊列文字;null = 顯示影片時間
+    var flyPaused = false
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
@@ -151,10 +163,11 @@ class VrMenu {
             }
             return if (canSeek() && px >= BAR_L - 20 && px <= BAR_R + 20) BAR else NONE
         }
-        val i = ((px - ROW_L) / ((ROW_R - ROW_L) / LABELS.size)).toInt()
-        if (i !in LABELS.indices) return NONE
+        val i = ((px - ROW_L) / ((ROW_R - ROW_L) / buttons.size)).toInt()
+        if (i !in buttons.indices) return NONE
+        val id = buttons[i]
         // 選項拉出時,只有原本那顆按鈕(再看一次 = 收起)有作用,避免移動時誤觸
-        return if (popup != NONE && i != popup) NONE else i
+        return if (popup != NONE && id != popup) NONE else id
     }
 
     fun barFraction(cx: Float): Float {
@@ -257,16 +270,18 @@ class VrMenu {
         // ---- 按鈕 ----
         val (btnTop, btnBottom) = band(BAR_END, BTN_END)
         centerText.textSize = 34f
-        val bw = (ROW_R - ROW_L) / LABELS.size
-        for (i in LABELS.indices) {
-            val label = when (i) {
+        val bw = (ROW_R - ROW_L) / buttons.size
+        for (i in buttons.indices) {
+            val id = buttons[i]
+            val label = when (id) {
                 BTN_POSTURE -> if (lying) "躺平" else "坐姿"
                 BTN_MODE -> MODE_NAMES[mode]
-                else -> LABELS[i]
+                BTN_FLY_PAUSE -> if (flyPaused) "繼續" else "暫停"
+                else -> LABELS[id]
             }
-            centerText.color = if (popup != NONE && popup != i) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
+            centerText.color = if (popup != NONE && popup != id) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
             drawButton(c, ROW_L + i * bw + 6, btnTop + 6, ROW_L + (i + 1) * bw - 6, btnBottom - 6,
-                hover == i || popup == i, if (hover == i) dwell else 0f, label)
+                hover == id || popup == id, if (hover == id) dwell else 0f, label)
         }
         centerText.color = 0xFFFFFFFF.toInt()
 
@@ -274,10 +289,12 @@ class VrMenu {
         val (infoTop, infoBottom) = band(BTN_END, H.toFloat())
         centerText.textSize = 34f
         centerText.color = 0xFFBBBBBB.toInt()
-        val time = if (canSeek()) "${fmt(current)} / ${fmt(duration)}" else "找不到可控制的影片"
-        val state = if (hasVideo && paused) "    已暫停" else ""
-        c.drawText("$time$state    音量 $volume    ${MODE_NAMES[mode]}",
-            W / 2f, (infoTop + infoBottom) / 2 + 12, centerText)
+        val info = infoText ?: run {
+            val time = if (canSeek()) "${fmt(current)} / ${fmt(duration)}" else "找不到可控制的影片"
+            val state = if (hasVideo && paused) "    已暫停" else ""
+            "$time$state    音量 $volume    ${MODE_NAMES[mode]}"
+        }
+        c.drawText(info, W / 2f, (infoTop + infoBottom) / 2 + 12, centerText)
         centerText.color = 0xFFFFFFFF.toInt()
     }
 }

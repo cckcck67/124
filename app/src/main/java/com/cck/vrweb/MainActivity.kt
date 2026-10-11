@@ -2,7 +2,9 @@ package com.cck.vrweb
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -39,7 +41,11 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ArrayAdapter
 import android.widget.LinearLayout
+import android.widget.ListView
+import android.widget.ScrollView
+import android.widget.TextView
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.asin
@@ -50,15 +56,25 @@ import kotlin.math.sin
 class MainActivity : Activity(), SensorEventListener {
 
     companion object {
-        // 網頁所在虛擬螢幕的畫質(16:9)。DPI 跟著解析度等比例調整,網頁排版都和 1280x720@240 相同
+        // 畫質:網頁長邊的像素(網頁 16:9,直式時長邊在上下)。DPI 跟著解析度等比例調整,
+        // 網頁排版都和 1280x720@240 相同。虛擬螢幕是長邊 x 長邊的正方形,轉向時只改網頁大小
         val QUALITY_W = intArrayOf(1920, 2560, 3840)
-        val QUALITY_H = intArrayOf(1080, 1440, 2160)
         val QUALITY_DPI = intArrayOf(360, 480, 720)
         val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
         const val QUALITY_4K = 2
 
         /** App 內建首頁 */
-        const val HOME_URL = WebPresentation.APP_ORIGIN + "/assets/home.html"
+        /** 網頁瀏覽的起始頁、空中遊覽(App 內建頁面) */
+        const val WEB_START = WebPresentation.APP_ORIGIN + "/assets/start.html"
+        const val FLIGHT_URL = WebPresentation.APP_ORIGIN + "/assets/flight.html"
+
+        // 目前的功能畫面
+        const val SCREEN_HOME = 0
+        const val SCREEN_WEB = 1
+        const val SCREEN_FLIGHT = 2
+        const val SCREEN_VIDEO = 3
+
+        const val REQ_PICK_VIDEO = 11
 
         const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
@@ -103,8 +119,14 @@ class MainActivity : Activity(), SensorEventListener {
     private var presentation: WebPresentation? = null
     private var displaySurface: Surface? = null
     private var quality = 1                 // QUALITY_* 的索引,預設 1440p
-    private var srcW = QUALITY_W[1]
-    private var srcH = QUALITY_H[1]
+    private var srcW = QUALITY_W[1]          // 虛擬螢幕(正方形)
+    private var srcH = QUALITY_W[1]
+    private var pageW = QUALITY_W[1]         // 網頁大小(橫式 16:9 或直式 9:16)
+    private var pageH = QUALITY_W[1] * 9 / 16
+
+    private var screen = SCREEN_HOME         // 目前的功能畫面
+    private var pendingUrl: String? = null   // 網頁元件還沒建立時要載入的網址
+    private val videoServer by lazy { LocalVideoServer(applicationContext) }
     @Volatile private var vrMode = false
 
     // 頭部感應器在背景執行緒處理,算好的結果交給主執行緒更新面板
@@ -161,8 +183,9 @@ class MainActivity : Activity(), SensorEventListener {
 
         quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
         srcW = QUALITY_W[quality]
-        srcH = QUALITY_H[quality]
+        srcH = QUALITY_W[quality]
         renderer = VrRenderer(srcW, srcH) { st -> handler.post { attachSurface(st) } }
+        updatePageSize()
         renderer.useMipmap = quality >= QUALITY_4K
         renderer.distortion = prefs.getFloat("k", 0.15f)
         VrMenu.lying = prefs.getBoolean("lying", false)
@@ -180,6 +203,7 @@ class MainActivity : Activity(), SensorEventListener {
         buildUi()
         setupGestures()
         hideSystemBars()
+        goHome()
 
     }
 
@@ -202,11 +226,12 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 介面 ----------------
 
-    private lateinit var qualityButton: Button
+    private lateinit var starButton: Button
+    private lateinit var titleLabel: TextView
+    private lateinit var overlayHost: FrameLayout      // 首頁 / 設定 / 我的影片(蓋在網頁上方)
 
     private fun buildUi() {
         val bg = 0xF01E1E1E.toInt()
-        qualityButton = button(QUALITY_NAMES[quality]) { chooseQuality() }
 
         urlInput = EditText(this).apply {
             setSingleLine()
@@ -220,17 +245,25 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener { showKeyboard() }
             setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
+        starButton = button("★") { showBookmarks() }
+        titleLabel = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            setSingleLine()
+            gravity = Gravity.CENTER
+        }
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(bg)
-            addView(button("←") { presentation?.handleBack() })
-            addView(button("首頁") { openUrl(HOME_URL) })
+            addView(button("←") { navBack() })
+            addView(button("首頁") { goHome() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(button("★") { showBookmarks() })
-            addView(qualityButton)
+            addView(titleLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(starButton)
             addView(button("VR") { setVr(true) })
         }
+        overlayHost = FrameLayout(this)
 
         // 網址列疊在畫面上,出現/隱藏時網頁大小不變
         val root = FrameLayout(this).apply {
@@ -239,8 +272,319 @@ class MainActivity : Activity(), SensorEventListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(topBar, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+            addView(overlayHost, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         setContentView(root)
+    }
+
+    // ---------------- 首頁 / 設定 / 我的影片 ----------------
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun showOverlay(v: View?) {
+        overlayHost.removeAllViews()
+        v?.isClickable = true   // 擋住觸控,不會點到下面的網頁
+        if (v != null) overlayHost.addView(v, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        overlayHost.visibility = if (v != null) View.VISIBLE else View.GONE
+    }
+
+    /** 上方標題列:左邊返回(首頁時是 App 名稱),右邊可放一顆按鈕 */
+    private fun header(title: String, back: Boolean, right: View?): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            if (back) addView(button("← 返回") { goHome() })
+            addView(TextView(context).apply {
+                text = title
+                setTextColor(Color.WHITE)
+                textSize = if (back) 22f else 30f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(dp(12), 0, 0, 0)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (right != null) addView(right)
+        }
+
+    private fun tile(text: String, enabled: Boolean, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        textSize = 24f
+        isAllCaps = false
+        setTextColor(if (enabled) Color.WHITE else Color.GRAY)
+        setBackgroundColor(if (enabled) 0xFF2F5A88.toInt() else 0xFF333333.toInt())
+        setOnClickListener { onClick() }
+    }
+
+    private fun versionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (e: Exception) { "" }
+
+    /** 首頁:功能選單,右上角是設定 */
+    private fun buildHome(): View {
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val tiles = listOf(
+            tile("網頁瀏覽", true) { goWeb() },
+            tile("空中遊覽", true) { goFlight() },
+            tile("我的影片", true) { showMyVideos() },
+            tile("編輯旅程\n(即將推出)", false) { toast("編輯旅程還在規劃中,敬請期待") },
+        )
+        for (r in 0 until 2) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (c in 0 until 2) {
+                row.addView(tiles[r * 2 + c], LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    setMargins(dp(8), dp(8), dp(8), dp(8))
+                })
+            }
+            grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF111111.toInt())
+            addView(header("WebVR", false, button("⚙ 設定") { showSettings() }))
+            addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                setMargins(dp(8), 0, dp(8), dp(8))
+            })
+            addView(TextView(context).apply {
+                text = "版本 " + versionName()
+                setTextColor(Color.GRAY)
+                gravity = Gravity.END
+                setPadding(0, 0, dp(16), dp(8))
+            })
+        }
+    }
+
+    private fun settingRow(text: String, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        textSize = 18f
+        isAllCaps = false
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        setOnClickListener { onClick() }
+    }
+
+    /** 設定頁(以後的設定都放這裡) */
+    private fun showSettings() {
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, dp(16), dp(16))
+            addView(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
+            addView(settingRow("Google 金鑰(空中遊覽):" +
+                    if (prefs.getString("mapsKey", "").isNullOrBlank()) "未設定" else "已設定") { askMapsKey() })
+            addView(settingRow("檢查更新(目前版本 ${versionName()})") {
+                Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
+            })
+        }
+        showOverlay(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF111111.toInt())
+            addView(header("設定", true, null))
+            addView(ScrollView(context).apply { addView(list) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        })
+        subScreen = true
+    }
+
+    private var subScreen = false   // 設定 / 我的影片(從首頁打開)
+
+    /** 我的影片:從手機選影片加入清單,點一下播放、長按移除 */
+    private fun showMyVideos() {
+        val items = loadMyVideos()
+        val listView = ListView(this).apply {
+            adapter = object : ArrayAdapter<String>(context, android.R.layout.simple_list_item_1,
+                items.map { it.second }) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                    (super.getView(position, convertView, parent) as TextView).apply {
+                        setTextColor(Color.WHITE)
+                        textSize = 18f
+                    }
+            }
+            setOnItemClickListener { _, _, i, _ -> playVideo(Uri.parse(items[i].first), items[i].second) }
+            setOnItemLongClickListener { _, _, i, _ ->
+                val dlg = AlertDialog.Builder(context)
+                    .setTitle("從清單移除?")
+                    .setMessage(items[i].second + "\n(只從清單移除,不會刪除手機裡的檔案)")
+                    .setPositiveButton("移除") { _, _ ->
+                        val list = loadMyVideos().filter { it.first != items[i].first }
+                        saveMyVideos(list)
+                        try {
+                            contentResolver.releasePersistableUriPermission(
+                                Uri.parse(items[i].first), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (e: Exception) {}
+                        showMyVideos()
+                    }
+                    .setNegativeButton("取消", null)
+                    .create()
+                dlg.setOnDismissListener { hideSystemBars() }
+                dlg.show()
+                true
+            }
+        }
+        showOverlay(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF111111.toInt())
+            addView(header("我的影片", true, button("＋ 加入影片") { pickVideos() }))
+            if (items.isEmpty()) addView(TextView(context).apply {
+                text = "還沒有影片\n按右上角「＋ 加入影片」從手機選擇\n(左右3D、VR180、360 影片進 VR 會自動判斷格式)"
+                setTextColor(Color.GRAY)
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            else addView(listView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        })
+        subScreen = true
+        screen = SCREEN_HOME
+        updateTopBar()
+    }
+
+    private fun loadMyVideos(): List<Pair<String, String>> = try {
+        val a = org.json.JSONArray(prefs.getString("myVideos", "[]"))
+        (0 until a.length()).map { a.getJSONObject(it).let { o -> o.optString("u") to o.optString("n") } }
+    } catch (e: Exception) { emptyList() }
+
+    private fun saveMyVideos(list: List<Pair<String, String>>) {
+        val a = org.json.JSONArray()
+        for ((u, n) in list) a.put(org.json.JSONObject().put("u", u).put("n", n))
+        prefs.edit().putString("myVideos", a.toString()).apply()
+    }
+
+    private fun pickVideos() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("video/*")
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, REQ_PICK_VIDEO)
+        } catch (e: Exception) { toast("找不到檔案選擇器") }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PICK_VIDEO || resultCode != RESULT_OK || data == null) return
+        val uris = mutableListOf<Uri>()
+        data.clipData?.let { c -> for (k in 0 until c.itemCount) uris.add(c.getItemAt(k).uri) }
+        data.data?.let { if (it !in uris) uris.add(it) }
+        val list = loadMyVideos().toMutableList()
+        for (u in uris) {
+            // 保留讀取權限,下次開 App 還能播放
+            try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (e: Exception) {}
+            if (list.any { it.first == u.toString() }) continue
+            list.add(u.toString() to displayName(u))
+        }
+        saveMyVideos(list)
+        showMyVideos()
+    }
+
+    private fun displayName(u: Uri): String {
+        try {
+            contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) return it.getString(0) ?: "影片"
+            }
+        } catch (e: Exception) {}
+        return u.lastPathSegment ?: "影片"
+    }
+
+    private fun toast(msg: String) = android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+
+    // ---------------- 切換功能 ----------------
+
+    /** 回首頁:網頁瀏覽的影片先暫停(網頁保留);空中遊覽 / 我的影片直接關掉 */
+    private fun goHome() {
+        if (vrMode) setVr(false)
+        when (screen) {
+            SCREEN_WEB -> {
+                presentation?.pauseAll()
+                saveWebUrl()
+            }
+            SCREEN_FLIGHT, SCREEN_VIDEO -> loadInWeb("about:blank")
+        }
+        screen = SCREEN_HOME
+        subScreen = false
+        hideKeyboard()
+        showOverlay(buildHome())
+        updateTopBar()
+    }
+
+    private fun isWebPage(url: String?) = url != null && url.startsWith("http") &&
+            !url.startsWith("http://127.0.0.1") && !WebPresentation.isFlight(url)
+
+    private fun saveWebUrl() {
+        presentation?.currentUrl?.takeIf { isWebPage(it) }?.let { prefs.edit().putString("url", it).apply() }
+    }
+
+    /** 網頁瀏覽:回到上次的網頁(第一次是起始頁) */
+    private fun goWeb() {
+        val cur = presentation?.currentUrl ?: pendingUrl
+        screen = SCREEN_WEB
+        subScreen = false
+        showOverlay(null)
+        menu.buttons = VrMenu.VIDEO_BUTTONS
+        applySettings()
+        if (isWebPage(cur)) { barShown = true; updateTopBar() }
+        else openUrl(prefs.getString("url", null)?.takeIf { isWebPage(it) } ?: WEB_START)
+        barShown = true
+        updateTopBar()
+    }
+
+    private fun goFlight() {
+        screen = SCREEN_FLIGHT
+        subScreen = false
+        showOverlay(null)
+        titleLabel.text = "空中遊覽"
+        menu.buttons = VrMenu.FLIGHT_BUTTONS
+        applySettings()
+        loadInWeb(FLIGHT_URL)
+        updateTopBar()
+    }
+
+    private fun playVideo(uri: Uri, name: String) {
+        screen = SCREEN_VIDEO
+        subScreen = false
+        showOverlay(null)
+        titleLabel.text = name
+        menu.buttons = VrMenu.VIDEO_BUTTONS
+        applySettings()
+        loadInWeb(videoServer.playerUrl(uri, name))
+        updateTopBar()
+    }
+
+    /** 網址列的「←」:網頁上一頁;空中遊覽回目的地選單;我的影片回清單 */
+    private fun navBack() {
+        when (screen) {
+            SCREEN_WEB -> if (presentation?.handleBack() != true) goHome()
+            SCREEN_FLIGHT -> {
+                val p = presentation
+                if (p == null) goHome()
+                else p.run("(window.vrBack?vrBack():false)") { r -> if (r != "true") goHome() }
+            }
+            SCREEN_VIDEO -> { goHome(); showMyVideos() }
+            else -> goHome()
+        }
+    }
+
+    // ---------------- 直式 / 橫式 ----------------
+
+    /** 網頁大小跟著手機方向(VR 一律橫式);只改排版,網頁不會重新載入 */
+    private fun updatePageSize() {
+        val long = QUALITY_W[quality]
+        val short = long * 9 / 16
+        val portrait = !vrMode &&
+                resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        pageW = if (portrait) short else long
+        pageH = if (portrait) long else short
+        renderer.pageW = pageW
+        renderer.pageH = pageH
+        presentation?.setPageSize(pageW, pageH)
+        redraw()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (vrMode) reverseLandscape = displayRotation() == Surface.ROTATION_270
+        updatePageSize()
     }
 
     /** 網址列「畫質」:選好後重新載入目前網頁(回到原本的播放位置) */
@@ -252,6 +596,7 @@ class MainActivity : Activity(), SensorEventListener {
             .setSingleChoiceItems(names, quality) { d, i ->
                 d.dismiss()
                 setQuality(i)
+                if (subScreen && screen == SCREEN_HOME) showSettings()   // 更新設定頁上的數值
             }
             .setNegativeButton("取消", null)
             .create()
@@ -301,43 +646,69 @@ class MainActivity : Activity(), SensorEventListener {
             Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f }
     }
 
+    // 空中遊覽自己的設定(和影片的 VR 設定分開存,不會互相影響)
+    private var flyGain = 0.7f
+    private var flySpeed = 1f
+    private var flyAlt = 1f
+
+    private val flightSettings by lazy {
+        listOf(
+            Setting("gain", "轉頭比例", 0.05f, 0.2f, 1.5f, "%.2f", { 0.7f }) { flyGain = it; lastYtYaw = 999f },
+            Setting("speed", "飛行速度", 0.25f, 0.25f, 3f, "%.2f倍", { 1f }) { flySpeed = it; sendFlightConfig() },
+            Setting("alt", "飛行高度", 0.1f, 0.5f, 2.5f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
+        ) + flatSettings.filter { it.key != "tilt" }
+    }
+
+    private fun sendFlightConfig() {
+        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt)")
+    }
+
     private fun modeSettings(m: Int) = when {
         VrRenderer.isSphere(m) -> sphereSettings
         m == VrRenderer.MODE_YT -> ytSettings
         else -> flatSettings
     }
 
-    private fun settingValue(m: Int, st: Setting) = prefs.getFloat("m${m}_${st.key}", st.def(m))
+    /** 目前功能用的設定:空中遊覽有自己的一組,其他依 VR 模式 */
+    private fun currentSettings() = if (screen == SCREEN_FLIGHT) flightSettings else modeSettings(renderer.mode)
+
+    private fun prefKey(st: Setting) =
+        if (screen == SCREEN_FLIGHT) "fly_${st.key}" else "m${renderer.mode}_${st.key}"
+
+    private fun settingValue(st: Setting) = prefs.getFloat(prefKey(st), st.def(renderer.mode))
+
+    /** 套用目前功能 / 模式自己存的設定 */
+    private fun applySettings() {
+        for (st in currentSettings()) st.apply(settingValue(st))
+        redraw()
+    }
 
     /** 切換模式:套用這個模式自己存的設定 */
     private fun setMode(m: Int) {
         renderer.mode = m
         menu.mode = m
         prefs.edit().putInt("mode", m).apply()
-        for (st in modeSettings(m)) st.apply(settingValue(m, st))
-        redraw()
+        applySettings()
     }
 
-    /** 設定頁第 i 項 + / −(最後一項是播放速度) */
+    /** 設定頁第 i 項 + / −(影片時最後一項是播放速度) */
     private fun adjustSetting(i: Int, dir: Int) {
-        val m = renderer.mode
-        val list = modeSettings(m)
-        if (i == list.size) {
+        val list = currentSettings()
+        if (screen != SCREEN_FLIGHT && i == list.size) {
             speedIndex = (speedIndex + dir).coerceIn(0, speeds.size - 1)
             presentation?.setSpeed(speeds[speedIndex])
             return
         }
         val st = list.getOrNull(i) ?: return
-        val v = (settingValue(m, st) + dir * st.step).coerceIn(st.min, st.max)
-        prefs.edit().putFloat("m${m}_${st.key}", v).apply()
+        val v = (settingValue(st) + dir * st.step).coerceIn(st.min, st.max)
+        prefs.edit().putFloat(prefKey(st), v).apply()
         st.apply(v)
         redraw()
     }
 
     private fun refreshSettingRows() {
-        val m = renderer.mode
-        menu.settingRows = modeSettings(m).map { it.name to it.format.format(settingValue(m, it)) } +
-                ("速度" to "${speeds[speedIndex]}x")
+        val rows = currentSettings().map { it.name to it.format.format(settingValue(it)) }
+        menu.settingRows = if (screen == SCREEN_FLIGHT) rows else rows + ("速度" to "${speeds[speedIndex]}x")
     }
 
     /**
@@ -367,17 +738,32 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun openUrl(url: String) {
-        urlInput.setText(if (url == HOME_URL) "" else url)
-        presentation?.loadUrl(url)
+        urlInput.setText(if (url == WEB_START) "" else url)
+        loadInWeb(url)
         hideKeyboard()
-        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現(首頁不收)
-        barShown = url == HOME_URL
+        // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現(起始頁不收)
+        barShown = url == WEB_START
         updateTopBar()
     }
 
+    /** 在網頁元件載入網址(還沒建立時等建立後再載入) */
+    private fun loadInWeb(url: String) {
+        val p = presentation
+        if (p == null) pendingUrl = url else p.loadUrl(url)
+    }
+
+    /** 網址列:網頁瀏覽時依捲動顯示;空中遊覽、我的影片只留返回 / 首頁 / VR;首頁與 VR 時隱藏 */
     private fun updateTopBar() {
-        if (vrMode) return
-        val show = urlInput.hasFocus() || barShown
+        if (vrMode) { topBar.visibility = View.GONE; return }
+        val web = screen == SCREEN_WEB
+        urlInput.visibility = if (web) View.VISIBLE else View.GONE
+        starButton.visibility = if (web) View.VISIBLE else View.GONE
+        titleLabel.visibility = if (web) View.GONE else View.VISIBLE
+        val show = when (screen) {
+            SCREEN_HOME -> false
+            SCREEN_WEB -> urlInput.hasFocus() || barShown
+            else -> true
+        }
         topBar.visibility = if (show) View.VISIBLE else View.GONE
     }
 
@@ -398,7 +784,8 @@ class MainActivity : Activity(), SensorEventListener {
             .setView(box)
             .setPositiveButton("儲存") { _, _ ->
                 prefs.edit().putString("mapsKey", et.text.toString().trim()).apply()
-                presentation?.reload()   // 重新載入,讓頁面拿到新金鑰
+                if (screen == SCREEN_FLIGHT) presentation?.reload()   // 重新載入,讓頁面拿到新金鑰
+                if (subScreen && screen == SCREEN_HOME) showSettings()
             }
             .setNegativeButton("取消", null)
             .create()
@@ -525,7 +912,8 @@ class MainActivity : Activity(), SensorEventListener {
         val surface = Surface(st)
         displaySurface = surface
         virtualDisplay?.let { it.surface = surface; return }
-        createDisplay(HOME_URL, -1.0)   // 開啟 App 先到首頁
+        createDisplay(pendingUrl ?: "about:blank", -1.0)   // 開啟 App 先到首頁(網頁先空白)
+        pendingUrl = null
     }
 
     /** 建立虛擬螢幕與上面的網頁(私有虛擬螢幕:只顯示本 App 內容,不需要螢幕錄製權限) */
@@ -537,7 +925,7 @@ class MainActivity : Activity(), SensorEventListener {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         )
         virtualDisplay = vd
-        presentation = WebPresentation(this, vd.display, srcW, srcH).also {
+        presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
             it.show()
@@ -554,15 +942,16 @@ class MainActivity : Activity(), SensorEventListener {
         quality = q
         prefs.edit().putInt("quality", q).apply()
         srcW = QUALITY_W[q]
-        srcH = QUALITY_H[q]
+        srcH = QUALITY_W[q]
+        updatePageSize()
         recreateWeb()
     }
 
     /** 重建虛擬螢幕與網頁(換畫質 / 瀏覽器身分),回到目前網頁與播放位置 */
     private fun recreateWeb() {
-        val p = presentation ?: return recreateWeb(HOME_URL, -1.0)
+        val p = presentation ?: return recreateWeb("about:blank", -1.0)
         // 先問網頁目前播放到哪裡,重新載入後跳回去
-        p.videoStatus { st -> recreateWeb(p.currentUrl ?: HOME_URL, st?.current ?: -1.0) }
+        p.videoStatus { st -> recreateWeb(p.currentUrl ?: "about:blank", st?.current ?: -1.0) }
     }
 
     private fun recreateWeb(url: String, at: Double) {
@@ -574,7 +963,6 @@ class MainActivity : Activity(), SensorEventListener {
         virtualDisplay = null
         renderer.setBufferSize(srcW, srcH)
         renderer.useMipmap = q >= QUALITY_4K
-        qualityButton.text = QUALITY_NAMES[q]
         createDisplay(url, at)
     }
 
@@ -585,7 +973,8 @@ class MainActivity : Activity(), SensorEventListener {
             if (!ticking) return
             val p = presentation
             if (p != null) {
-                if (!vrMode) {
+                if (screen == SCREEN_FLIGHT) sendFlightConfig()   // 飛行速度 / 高度(網頁重新載入後也要再給)
+                if (!vrMode && screen == SCREEN_WEB) {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
                         lastScrollY = y
@@ -625,7 +1014,13 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.vrMode = on
         renderer.showCursor = false
         setMenu(false)
-        topBar.visibility = if (on) View.GONE else View.VISIBLE
+        // VR 一律橫式;離開 VR 後跟著手機方向
+        requestedOrientation = if (on) ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                               else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        updatePageSize()
+        updateTopBar()
+        menu.buttons = if (screen == SCREEN_FLIGHT) VrMenu.FLIGHT_BUTTONS else VrMenu.VIDEO_BUTTONS
+        menu.infoText = null
         reverseLandscape = displayRotation() == Surface.ROTATION_270
         needLevelRef = true
         recenterAt = 0L
@@ -646,7 +1041,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun autoDetectMode() {
         val p = presentation ?: return
         // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
-        if (WebPresentation.isFlight(p.currentUrl)) {
+        if (screen == SCREEN_FLIGHT) {
             ytHalf = false
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
             handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
@@ -714,8 +1109,8 @@ class MainActivity : Activity(), SensorEventListener {
         val coords = Array(n) { i ->
             MotionEvent.PointerCoords().also { c ->
                 ev.getPointerCoords(i, c)
-                c.x = (c.x - r[0]) / r[2] * srcW
-                c.y = (c.y - r[1]) / r[3] * srcH
+                c.x = (c.x - r[0]) / r[2] * pageW
+                c.y = (c.y - r[1]) / r[3] * pageH
             }
         }
         val x = coords[0].x
@@ -810,7 +1205,8 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onBackPressed() {
         when {
             vrMode -> setVr(false)
-            presentation?.handleBack() == true -> {}
+            subScreen -> goHome()                       // 設定 / 我的影片 → 首頁
+            screen != SCREEN_HOME -> navBack()
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
     }
@@ -923,8 +1319,10 @@ class MainActivity : Activity(), SensorEventListener {
         val now = SystemClock.uptimeMillis()
         if (now - lastYtAt < 33) return
         // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
-        var yaw = -Math.toDegrees(az.toDouble()).toFloat()
-        var pitch = -Math.toDegrees(down.toDouble()).toFloat()
+        // 空中遊覽:轉頭比例(畫面跟著轉多少)
+        val gain = if (screen == SCREEN_FLIGHT) flyGain else 1f
+        var yaw = -Math.toDegrees(az.toDouble()).toFloat() * gain
+        var pitch = -Math.toDegrees(down.toDouble()).toFloat() * gain
         // 轉到影片邊緣就停住(YouTube 超出範圍時會把畫面彈回來)。
         // YouTube 的 fov 是垂直視野,水平視野依播放器比例(約 16:9)換算
         val vHalf = ytFov / 2f
@@ -1021,6 +1419,10 @@ class MainActivity : Activity(), SensorEventListener {
                 return
             }
             VrMenu.BTN_FWD -> p.seekBy(10)
+            // 空中遊覽
+            VrMenu.BTN_FLY_PAUSE -> { p.run("window.vrFlight&&vrFlight('pause')"); menu.flyPaused = !menu.flyPaused }
+            VrMenu.BTN_FLY_RESTART -> p.run("window.vrFlight&&vrFlight('restart')")
+            VrMenu.BTN_FLY_NEXT -> p.run("window.vrFlight&&vrFlight('next')")
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
@@ -1136,6 +1538,19 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun pollStatus() {
         lastStatusPoll = SystemClock.uptimeMillis()
+        if (screen == SCREEN_FLIGHT) {
+            presentation?.run("(window.vrFlightState?vrFlightState():null)") { r ->
+                val o = try { if (r == null || r == "null") null else org.json.JSONObject(r) } catch (e: Exception) { null }
+                menu.hasVideo = false
+                menu.flyPaused = o?.optBoolean("paused") == true
+                menu.infoText = if (o == null) "空中遊覽:請先在 2D 畫面選擇目的地" else
+                    "空中遊覽  " + o.optString("name") +
+                        (if (o.optBoolean("arrived")) "  已抵達" else "") + (if (menu.flyPaused) "  已暫停" else "")
+                redrawPanel(force = true)
+            }
+            return
+        }
+        menu.infoText = null
         presentation?.videoStatus { st ->
             menu.hasVideo = st != null
             if (st != null) {
@@ -1175,7 +1590,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     override fun onPause() {
-        presentation?.currentUrl?.let { prefs.edit().putString("url", it).apply() }
+        if (screen == SCREEN_WEB) saveWebUrl()
         sensorManager.unregisterListener(this)
         sensorThread?.quitSafely()
         sensorThread = null
