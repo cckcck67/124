@@ -236,8 +236,11 @@ class MainActivity : Activity(), SensorEventListener {
         urlInput = EditText(this).apply {
             setSingleLine()
             hint = "網址 / 關鍵字(yt 開頭 = 搜尋 YouTube)"
+            // 深色底、白字(原本白底白字,打的字看不到)
+            setBackgroundColor(0xFF3A3A3A.toInt())
+            setPadding(dp(10), dp(8), dp(10), dp(8))
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(0xFF999999.toInt())
             imeOptions = EditorInfo.IME_ACTION_GO
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSelectAllOnFocus(true)
@@ -508,8 +511,9 @@ class MainActivity : Activity(), SensorEventListener {
         updateTopBar()
     }
 
+    /** 一般網頁(App 內建頁面、我的影片的播放頁不算;舊版留下的內建首頁網址也不算) */
     private fun isWebPage(url: String?) = url != null && url.startsWith("http") &&
-            !url.startsWith("http://127.0.0.1") && !WebPresentation.isFlight(url)
+            !url.startsWith("http://127.0.0.1") && !url.startsWith(WebPresentation.APP_ORIGIN)
 
     private fun saveWebUrl() {
         presentation?.currentUrl?.takeIf { isWebPage(it) }?.let { prefs.edit().putString("url", it).apply() }
@@ -523,7 +527,7 @@ class MainActivity : Activity(), SensorEventListener {
         showOverlay(null)
         menu.buttons = VrMenu.VIDEO_BUTTONS
         applySettings()
-        if (isWebPage(cur)) { barShown = true; updateTopBar() }
+        if (isWebPage(cur) || cur == WEB_START) { barShown = true; updateTopBar() }
         else openUrl(prefs.getString("url", null)?.takeIf { isWebPage(it) } ?: WEB_START)
         barShown = true
         updateTopBar()

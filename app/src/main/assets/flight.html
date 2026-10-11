@@ -19,7 +19,15 @@
 </style>
 </head>
 <body>
-<div id="map"<script>
+<div id="map"></div>
+<div id="title"></div>
+<div id="fade"></div>
+<div id="menu">
+  <h1>空中遊覽</h1>
+  <div id="list"></div>
+  <div id="msg"></div>
+</div>
+<script>
 // 目的地:從遠處朝地標直線慢慢滑行,到附近停住懸停(不繞圈,比較不會暈)
 // r = 懸停時離地標的距離、alt = 飛行高度、top = 看向的高度(公尺)
 var PLACES = [
@@ -164,8 +172,6 @@ function fly(now) {
 
 // 2D 時點兩下回目的地選單
 document.addEventListener('dblclick', function () { window.vrBack(); });
-</script>目的地選單(App 的返回鍵會先回上一頁;這裡提供點兩下回選單)
-document.addEventListener('dblclick', function () { if (place) { place = null; showMenu(); } });
 </script>
 </body>
 </html>
