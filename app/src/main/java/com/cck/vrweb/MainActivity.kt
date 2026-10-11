@@ -156,6 +156,8 @@ class MainActivity : Activity(), SensorEventListener {
         prefs = getSharedPreferences("vr", MODE_PRIVATE)
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        // 已移除的立體照功能留下的深度模型(約 27MB),刪掉釋放空間
+        java.io.File(filesDir, "depth.onnx").delete()
 
         quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
         srcW = QUALITY_W[quality]
