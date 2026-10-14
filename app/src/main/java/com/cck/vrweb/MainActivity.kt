@@ -228,7 +228,6 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 介面 ----------------
 
     private lateinit var starButton: Button
-    private lateinit var ytAppButton: Button          // YouTube 的 VR 影片:用 YouTube App 播放
     private var ytVrVideo = false                    // 目前網頁是 YouTube 的 360 / VR180 影片
     private lateinit var titleLabel: TextView
     private lateinit var overlayHost: FrameLayout      // 首頁 / 設定 / 我的影片(蓋在網頁上方)
@@ -252,7 +251,6 @@ class MainActivity : Activity(), SensorEventListener {
             setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
         starButton = button("★") { showBookmarks() }
-        ytAppButton = button("YouTube App") { openInYouTubeApp() }.apply { visibility = View.GONE }
         titleLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 18f
@@ -267,7 +265,6 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("首頁") { goHome() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(titleLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(ytAppButton)
             addView(starButton)
             addView(button("VR") { setVr(true) })
         }
@@ -778,7 +775,6 @@ class MainActivity : Activity(), SensorEventListener {
         val web = screen == SCREEN_WEB
         urlInput.visibility = if (web) View.VISIBLE else View.GONE
         starButton.visibility = if (web) View.VISIBLE else View.GONE
-        ytAppButton.visibility = if (web && ytVrVideo) View.VISIBLE else View.GONE
         titleLabel.visibility = if (web) View.GONE else View.VISIBLE
         val show = when (screen) {
             SCREEN_HOME -> false
@@ -950,6 +946,7 @@ class MainActivity : Activity(), SensorEventListener {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
+            it.onFullscreen = { on -> onWebFullscreen(on) }
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -1078,9 +1075,9 @@ class MainActivity : Activity(), SensorEventListener {
         // 先在背景直接問 YouTube 這部影片的格式(最準);問不到再從網頁裡判斷
         val url = p.currentUrl
         detectByAspect(p)
-        // YouTube 的 VR 影片:App 裡只能平面看,提醒可以用 YouTube App 播放
+        // YouTube 的 VR 影片:App 裡只能平面看,提醒按全螢幕會改用 YouTube App
         if (screen == SCREEN_WEB && ytVrVideo) handler.postDelayed({
-            if (vrMode) showMessage("VR 影片", "可按網址列「YouTube App」", 3500)
+            if (vrMode) showMessage("VR 影片", "退出 VR 後按全螢幕,改用 YouTube App", 3500)
         }, ENTER_DELAY_MS + 300)
     }
 
@@ -1134,7 +1131,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun checkYouTubeVr(url: String?) {
         val id = youtubeId(url)
         if (id == null) {
-            if (ytVrVideo) { ytVrVideo = false; updateTopBar() }
+            ytVrVideo = false
             return
         }
         fun apply(proj: String?) {
@@ -1142,11 +1139,7 @@ class MainActivity : Activity(), SensorEventListener {
             val vr = !proj.isNullOrEmpty()
             if (vr == ytVrVideo) return
             ytVrVideo = vr
-            if (vr && screen == SCREEN_WEB && !vrMode) {
-                barShown = true
-                toast("這是 VR 影片:可按網址列的「YouTube App」用 YouTube App 播放")
-            }
-            updateTopBar()
+            if (vr && screen == SCREEN_WEB && !vrMode) toast("這是 VR 影片:按全螢幕會改用 YouTube App 播放")
         }
         // 先在背景問 YouTube(最準);問不到(沒網路等)等網頁載入後從網頁裡判斷
         youtubeProjection(url) { proj ->
@@ -1156,23 +1149,36 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     /**
-     * 開啟上層 VR 播放器:原本網頁的影片離開全螢幕並暫停,
-     * VR 播放器從同一個時間點接著播(轉成橫式)
+     * 網頁影片按全螢幕:YouTube 的 360 / VR180 影片改用 YouTube App 播放
+     * (App 裡的 YouTube 網頁播放器轉動範圍受限);其他影片照一般瀏覽器全螢幕
      */
-    /** 用 YouTube App 從目前的時間點播放這部影片(App 裡的影片先暫停) */
-    private fun openInYouTubeApp() {
+    private fun onWebFullscreen(on: Boolean) {
         val p = presentation ?: return
-        val id = youtubeId(p.currentUrl) ?: return
+        if (!on || vrMode || screen != SCREEN_WEB) return
+        val url = p.currentUrl
+        val id = youtubeId(url) ?: return
+        youtubeProjection(url) { proj ->
+            if (!proj.isNullOrEmpty() && p.isFullscreen && !vrMode && youtubeId(p.currentUrl) == id) openInYouTubeApp(p, id)
+        }
+    }
+
+    /**
+     * 用 YouTube App 從目前的時間點全螢幕播放(App 裡的影片離開全螢幕並暫停)。
+     * 也請 YouTube App 播完就關閉,回到這個 App(要看 YouTube App 的版本支不支援)
+     */
+    private fun openInYouTubeApp(p: WebPresentation, id: String) {
         p.videoStatus { st ->
             val t = (st?.current ?: 0.0).toInt()
-            p.exitFullscreen()
-            p.pauseAll()
             val uri = Uri.parse("https://www.youtube.com/watch?v=" + Uri.encode(id) + if (t > 0) "&t=${t}s" else "")
             val intent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")
+                .putExtra("force_fullscreen", true)
+                .putExtra("finish_on_ended", true)
             try {
                 startActivity(intent)
+                p.exitFullscreen()
+                p.pauseAll()
             } catch (e: Exception) {
-                toast("找不到 YouTube App")
+                toast("找不到 YouTube App,在這裡播放")
             }
         }
     }
