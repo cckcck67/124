@@ -61,7 +61,6 @@ class MainActivity : Activity(), SensorEventListener {
         val QUALITY_W = intArrayOf(1920, 2560, 3840)
         val QUALITY_DPI = intArrayOf(360, 480, 720)
         val QUALITY_NAMES = arrayOf("1080p", "1440p", "4K")
-        const val ONOFF = "onoff"   // 設定項目顯示成「開 / 關」
         const val QUALITY_4K = 2
 
         /** App 內建首頁 */
@@ -181,9 +180,7 @@ class MainActivity : Activity(), SensorEventListener {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         // 已移除的立體照功能留下的深度模型(約 27MB),刪掉釋放空間
         java.io.File(filesDir, "depth.onnx").delete()
-        Diag.init(this)
-        Diag.log("start ${versionName()} ${Build.MANUFACTURER} ${Build.MODEL} Android ${Build.VERSION.RELEASE} " +
-                "WebView ${try { android.webkit.WebView.getCurrentWebViewPackage()?.versionName } catch (e: Throwable) { "?" }}")
+        java.io.File(filesDir, "diag.txt").delete()   // 已移除的診斷紀錄
 
         quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
         srcW = QUALITY_W[quality]
@@ -231,7 +228,7 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 介面 ----------------
 
     private lateinit var starButton: Button
-    private lateinit var vrPlayerButton: Button       // YouTube 的 VR 影片:自己按才開 VR 播放器
+    private lateinit var ytAppButton: Button          // YouTube 的 VR 影片:用 YouTube App 播放
     private var ytVrVideo = false                    // 目前網頁是 YouTube 的 360 / VR180 影片
     private lateinit var titleLabel: TextView
     private lateinit var overlayHost: FrameLayout      // 首頁 / 設定 / 我的影片(蓋在網頁上方)
@@ -255,9 +252,7 @@ class MainActivity : Activity(), SensorEventListener {
             setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
         starButton = button("★") { showBookmarks() }
-        vrPlayerButton = button("VR 播放器") {
-            presentation?.let { if (!it.vrPlayerOpen) openYouTubeVr(it) }
-        }.apply { visibility = View.GONE }
+        ytAppButton = button("YouTube App") { openInYouTubeApp() }.apply { visibility = View.GONE }
         titleLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 18f
@@ -272,7 +267,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("首頁") { goHome() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(titleLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(vrPlayerButton)
+            addView(ytAppButton)
             addView(starButton)
             addView(button("VR") { setVr(true) })
         }
@@ -383,7 +378,6 @@ class MainActivity : Activity(), SensorEventListener {
             addView(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
             addView(settingRow("Google 金鑰(空中遊覽):" +
                     if (prefs.getString("mapsKey", "").isNullOrBlank()) "未設定" else "已設定") { askMapsKey() })
-            addView(settingRow("診斷紀錄(${Diag.count()} 筆):傳給 Claude") { sendDiag() })
             addView(settingRow("檢查更新(目前版本 ${versionName()})") {
                 Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
             })
@@ -399,32 +393,6 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private var subScreen = false   // 設定 / 我的影片(從首頁打開)
-
-    /** 診斷紀錄:分享(例如傳到 Claude App)或複製,貼給 Claude 分析 */
-    private fun sendDiag() {
-        Diag.save()
-        val text = "VR網頁播放器 診斷紀錄\n" + Diag.text()
-        val dlg = AlertDialog.Builder(this)
-            .setTitle("診斷紀錄(${Diag.count()} 筆)")
-            .setMessage("「分享」可直接傳到 Claude App;或按「複製」再貼到和 Claude 的對話。")
-            .setPositiveButton("分享") { _, _ ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, "VR網頁播放器 診斷紀錄")
-                    putExtra(Intent.EXTRA_TEXT, text)
-                }
-                try { startActivity(Intent.createChooser(send, "傳送診斷紀錄")) } catch (e: Exception) { toast("無法分享") }
-            }
-            .setNeutralButton("複製") { _, _ ->
-                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("診斷紀錄", text))
-                toast("已複製,貼到和 Claude 的對話")
-            }
-            .setNegativeButton("清除") { _, _ -> Diag.clear(); showSettings() }
-            .create()
-        dlg.setOnDismissListener { hideSystemBars() }
-        dlg.show()
-    }
 
     /** 我的影片:從手機選影片加入清單,點一下播放、長按移除 */
     private fun showMyVideos() {
@@ -536,7 +504,6 @@ class MainActivity : Activity(), SensorEventListener {
         if (vrMode) setVr(false)
         when (screen) {
             SCREEN_WEB -> {
-                if (presentation?.vrPlayerOpen == true) closeYouTubeVr()
                 presentation?.pauseAll()
                 saveWebUrl()
             }
@@ -597,7 +564,6 @@ class MainActivity : Activity(), SensorEventListener {
     private fun navBack() {
         when (screen) {
             SCREEN_WEB -> when {
-                presentation?.vrPlayerOpen == true -> closeYouTubeVr()   // 先關上層 VR 播放器
                 presentation?.handleBack() != true -> goHome()
             }
             SCREEN_FLIGHT -> {
@@ -700,15 +666,6 @@ class MainActivity : Activity(), SensorEventListener {
     private val speeds = floatArrayOf(0.5f, 1f, 1.5f)
     private var speedIndex = 1
 
-    // YouTube 環顧:平面顯示的設定 + YouTube 視野
-    private val ytSettings by lazy {
-        flatSettings +
-            Setting("ytgain", "轉頭比例", 0.05f, 0.2f, 2f, "%.2f", { 1f }) { ytGain = it; lastYtYaw = 999f } +
-            Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f } +
-            Setting("ytlearn", "邊界學習", 1f, 0f, 1f, ONOFF, { 1f }) { ytLearn = it >= 0.5f; lastYtYaw = 999f } +
-            Setting("ytdesk", "假裝電腦", 1f, 0f, 1f, ONOFF, { 0f }) { setFakeDesktop(it >= 0.5f) }
-    }
-
     // 空中遊覽自己的設定(和影片的 VR 設定分開存,不會互相影響)
     private var flyGain = 0.7f
     private var flySpeed = 1f
@@ -728,7 +685,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun modeSettings(m: Int) = when {
         VrRenderer.isSphere(m) -> sphereSettings
-        m == VrRenderer.MODE_YT -> ytSettings
+        m == VrRenderer.MODE_YT -> flatSettings
         else -> flatSettings
     }
 
@@ -766,15 +723,11 @@ class MainActivity : Activity(), SensorEventListener {
         val v = (settingValue(st) + dir * st.step).coerceIn(st.min, st.max)
         prefs.edit().putFloat(prefKey(st), v).apply()
         st.apply(v)
-        if (renderer.mode == VrRenderer.MODE_YT) Diag.log("setting ${st.key}=$v")
         redraw()
     }
 
     private fun refreshSettingRows() {
-        val rows = currentSettings().map {
-            val v = settingValue(it)
-            it.name to if (it.format == ONOFF) (if (v >= 0.5f) "開" else "關") else it.format.format(v)
-        }
+        val rows = currentSettings().map { it.name to it.format.format(settingValue(it)) }
         menu.settingRows = if (screen == SCREEN_FLIGHT) rows else rows + ("速度" to "${speeds[speedIndex]}x")
     }
 
@@ -825,8 +778,7 @@ class MainActivity : Activity(), SensorEventListener {
         val web = screen == SCREEN_WEB
         urlInput.visibility = if (web) View.VISIBLE else View.GONE
         starButton.visibility = if (web) View.VISIBLE else View.GONE
-        vrPlayerButton.visibility =
-            if (web && ytVrVideo && presentation?.vrPlayerOpen != true) View.VISIBLE else View.GONE
+        ytAppButton.visibility = if (web && ytVrVideo) View.VISIBLE else View.GONE
         titleLabel.visibility = if (web) View.GONE else View.VISIBLE
         val show = when (screen) {
             SCREEN_HOME -> false
@@ -998,7 +950,6 @@ class MainActivity : Activity(), SensorEventListener {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
-            it.onLog = { msg -> Diag.log(msg) }
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -1100,13 +1051,10 @@ class MainActivity : Activity(), SensorEventListener {
         hideSystemBars()
         if (!on) presentation?.let { p ->
             when {
-                // 上層 VR 播放器留著(維持橫式),按返回才關掉
-                p.vrPlayerOpen -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 // 一般影片在全螢幕中:離開全螢幕、停在目前的時間點(和 VR 播放器一樣回到網頁)
                 screen == SCREEN_WEB && p.isFullscreen -> { p.exitFullscreen(); p.pauseAll() }
             }
         }
-        Diag.log("vr ${if (on) "on" else "off"} screen=$screen")
         if (on) {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
@@ -1129,16 +1077,10 @@ class MainActivity : Activity(), SensorEventListener {
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
         // 先在背景直接問 YouTube 這部影片的格式(最準);問不到再從網頁裡判斷
         val url = p.currentUrl
-        if (p.vrPlayerOpen) {   // 已經在 VR 播放器裡 → 環顧
-            if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
-            Diag.log("look mode gain=$ytGain fov=$ytFov learn=$ytLearn")
-            handler.postDelayed({ if (vrMode) showMessage("環顧", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
-            return
-        }
         detectByAspect(p)
-        // VR 影片但沒開 VR 播放器:不自動切換,只提醒(先退出 VR,按網址列的「VR 播放器」)
+        // YouTube 的 VR 影片:App 裡只能平面看,提醒可以用 YouTube App 播放
         if (screen == SCREEN_WEB && ytVrVideo) handler.postDelayed({
-            if (vrMode) showMessage("VR 影片", "請先按網址列「VR 播放器」", 3500)
+            if (vrMode) showMessage("VR 影片", "可按網址列「YouTube App」", 3500)
         }, ENTER_DELAY_MS + 300)
     }
 
@@ -1198,12 +1140,11 @@ class MainActivity : Activity(), SensorEventListener {
         fun apply(proj: String?) {
             if (youtubeId(presentation?.currentUrl) != id) return   // 已經換到別的網頁
             val vr = !proj.isNullOrEmpty()
-            Diag.log("youtube $id projection=${proj ?: "?"}")
             if (vr == ytVrVideo) return
             ytVrVideo = vr
             if (vr && screen == SCREEN_WEB && !vrMode) {
                 barShown = true
-                toast("這是 VR 影片:想轉頭環顧可按網址列的「VR 播放器」")
+                toast("這是 VR 影片:可按網址列的「YouTube App」用 YouTube App 播放")
             }
             updateTopBar()
         }
@@ -1218,45 +1159,22 @@ class MainActivity : Activity(), SensorEventListener {
      * 開啟上層 VR 播放器:原本網頁的影片離開全螢幕並暫停,
      * VR 播放器從同一個時間點接著播(轉成橫式)
      */
-    private fun fakeDesktopPref() = prefs.getFloat("m${VrRenderer.MODE_YT}_ytdesk", 0f) >= 0.5f
-
-    /** 實驗「假裝電腦」切換:VR 播放器開著就從目前的時間點重新開啟 */
-    private fun setFakeDesktop(on: Boolean) {
+    /** 用 YouTube App 從目前的時間點播放這部影片(App 裡的影片先暫停) */
+    private fun openInYouTubeApp() {
         val p = presentation ?: return
-        if (!p.vrPlayerOpen || p.overlayFakeDesktop == on) return
         val id = youtubeId(p.currentUrl) ?: return
         p.videoStatus { st ->
-            val t = st?.current ?: 0.0
-            p.closeVrPlayer {
-                handler.post {
-                    p.fakeDesktop = on
-                    Diag.log("reopen VR player $id t=$t fakeDesktop=$on")
-                    p.openVrPlayer(id, t)
-                    lastYtYaw = 999f
-                }
-            }
-        }
-    }
-
-    private fun openYouTubeVr(p: WebPresentation) {
-        val id = youtubeId(p.currentUrl) ?: return
-        p.videoStatus { st ->
-            val t = st?.current ?: 0.0
-            p.fakeDesktop = fakeDesktopPref()
-            Diag.log("open VR player $id t=$t fakeDesktop=${p.fakeDesktop}")
+            val t = (st?.current ?: 0.0).toInt()
             p.exitFullscreen()
             p.pauseAll()
-            p.openVrPlayer(id, t)
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            updateTopBar()
+            val uri = Uri.parse("https://www.youtube.com/watch?v=" + Uri.encode(id) + if (t > 0) "&t=${t}s" else "")
+            val intent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                toast("找不到 YouTube App")
+            }
         }
-    }
-
-    /** 關掉上層 VR 播放器:原本網頁的影片跳到看到的時間點並暫停 */
-    private fun closeYouTubeVr() {
-        val p = presentation ?: return
-        p.closeVrPlayer { t -> Diag.log("close VR player t=$t"); p.seekAndPauseMain(t); updateTopBar() }
-        if (!vrMode) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     }
 
     private fun detectByAspect(p: WebPresentation) {
@@ -1506,12 +1424,7 @@ class MainActivity : Activity(), SensorEventListener {
         redraw()
     }
 
-    // YouTube 環顧:把頭的方向傳給 YouTube 播放器(最多約每秒 30 次,沒變就不送)
-    private var ytFov = 100f
-    private var ytGain = 1f            // 環顧的轉頭比例
-    private var ytLearn = true         // 自動學習 YouTube 的轉動邊界(診斷用,可在設定關掉)
-    private var lastDiagAt = 0L
-    private var lastDiag = ""
+    // 環顧(空中遊覽):把頭的方向傳給網頁(最多約每秒 30 次,沒變就不送)
     private var lastYtAt = 0L
     private var lastYtYaw = 999f
     private var lastYtPitch = 999f
@@ -1519,31 +1432,14 @@ class MainActivity : Activity(), SensorEventListener {
     private fun youtubeLook(az: Float, down: Float) {
         val now = SystemClock.uptimeMillis()
         if (now - lastYtAt < 33) return
-        // YouTube 的 yaw 方向和頭轉的方向相反(頭右轉 = yaw 減少)
-        // 轉頭比例(畫面跟著轉多少):空中遊覽、環顧各自設定
-        val gain = if (screen == SCREEN_FLIGHT) flyGain else ytGain
-        val yaw = -Math.toDegrees(az.toDouble()).toFloat() * gain
-        val pitch = (-Math.toDegrees(down.toDouble()).toFloat() * gain).coerceIn(-89f, 89f)
-        // 轉到影片邊緣的處理在 VR 播放器頁面裡:讀回 YouTube 實際的方向,停在它允許的邊界
-        if (abs(yaw - lastYtYaw) < 0.2f && abs(pitch - lastYtPitch) < 0.2f) return
+        // 空中遊覽:頭轉的角度 × 轉頭比例 = 地圖看的方向
+        val right = Math.toDegrees(az.toDouble()).toFloat() * flyGain
+        val up = (-Math.toDegrees(down.toDouble()).toFloat() * flyGain).coerceIn(-89f, 89f)
+        if (abs(right - lastYtYaw) < 0.2f && abs(up - lastYtPitch) < 0.2f) return
         lastYtAt = now
-        lastYtYaw = yaw
-        lastYtPitch = pitch
-        if (screen != SCREEN_WEB) { presentation?.lookAt(yaw, pitch, ytFov, false); return }
-        val headDeg = Math.toDegrees(az.toDouble()).toFloat()
-        presentation?.lookAt(yaw, pitch, ytFov, ytLearn) { r -> diagLook(headDeg, r) }
-    }
-
-    /** 診斷紀錄:有邊界事件就記,其他最多每 0.25 秒記一筆(數值有變才記) */
-    private fun diagLook(headDeg: Float, r: String?) {
-        val v = r?.trim('"')?.takeIf { it.isNotEmpty() && it != "null" } ?: return
-        val now = SystemClock.uptimeMillis()
-        val event = !v.endsWith(",")
-        val core = v.substringBeforeLast(',')
-        if (!event && (now - lastDiagAt < 250 || core == lastDiag)) return
-        lastDiagAt = now
-        lastDiag = core
-        Diag.log("look head=%.1f %s".format(headDeg, v))
+        lastYtYaw = right
+        lastYtPitch = up
+        presentation?.lookAt(right, up)
     }
 
     private fun dot(a: FloatArray, x: Float, y: Float, z: Float) = a[0] * x + a[1] * y + a[2] * z
@@ -1806,7 +1702,6 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onPause() {
         if (screen == SCREEN_WEB) saveWebUrl()
-        Diag.save()
         sensorManager.unregisterListener(this)
         sensorThread?.quitSafely()
         sensorThread = null
