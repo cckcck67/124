@@ -47,39 +47,8 @@ window.vrMedia = {
   getBoundingClientRect: function () { return document.getElementById('p').getBoundingClientRect(); }
 };
 
-// 轉頭控制看的方向。YouTube 能轉的範圍依影片而不同,所以不用猜:
-// 每次設定後讀回實際方向,被彈回原點或卡在邊緣,就把那裡記成邊界,之後停在邊界不再超過
-var lim = { lo: -180, hi: 180, plo: -90, phi: 90 };
-var pend = null, okY = 0, okP = 0, missY = 0, lastAy = 0;
-function signed(a) { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; }
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function setLimY(req, v) { if (req > 0) lim.hi = Math.max(0, v); else lim.lo = Math.min(0, v); }
-function setLimP(req, v) { if (req > 0) lim.phi = Math.max(0, v); else lim.plo = Math.min(0, v); }
-
-// right = 向右轉幾度、up = 向上幾度、fov = 視野
-window.vrLook = function (right, up, fov) {
-  if (!ready || !P.setSphericalProperties) return;
-  if (pend && P.getSphericalProperties) {
-    var s = P.getSphericalProperties() || {};
-    if (typeof s.yaw === 'number') {
-      var ay = signed(s.yaw);
-      if (Math.abs(ay - pend.y) <= 4) { okY = pend.y; missY = 0; }
-      else if (Math.abs(ay) < 2 && Math.abs(pend.y) > 8) { setLimY(pend.y, okY); missY = 0; }   // 被彈回原點
-      else if (++missY >= 3 && Math.abs(ay - lastAy) < 1.5) { setLimY(pend.y, ay); missY = 0; } // 卡在邊緣
-      lastAy = ay;
-    }
-    if (typeof s.pitch === 'number') {
-      if (Math.abs(s.pitch - pend.p) <= 4) okP = pend.p;
-      else if (Math.abs(s.pitch) < 2 && Math.abs(pend.p) > 8) setLimP(pend.p, okP);
-    }
-  }
-  var y = clamp(-right, lim.lo, lim.hi);   // YouTube 的 yaw:頭往右轉 = 數值減少
-  var p = clamp(up, lim.plo, lim.phi);
-  var o = { yaw: (y + 360) % 360, pitch: p, roll: 0 };
-  if (fov) o.fov = fov;
-  P.setSphericalProperties(o);
-  pend = { y: y, p: p };
-};
+// 轉頭控制看的方向由 App 處理(和電腦版頁面共用同一套程式),這裡只把播放器交出去:window.vrPlayer
+function diag(t) { try { console.log('vrdiag: ' + t); } catch (e) {} }
 
 window.onYouTubeIframeAPIReady = function () {
   P = new YT.Player('p', {
@@ -88,10 +57,16 @@ window.onYouTubeIframeAPIReady = function () {
     events: {
       onReady: function () {
         ready = true;
+        window.vrPlayer = P;
         if (start > 0) P.seekTo(start, true);
         P.playVideo();
+        diag('ready v=' + vid + ' spherical=' + JSON.stringify(P.getSphericalProperties ? P.getSphericalProperties() : null));
+      },
+      onStateChange: function (e) {
+        diag('state ' + e.data + ' spherical=' + JSON.stringify(P.getSphericalProperties ? P.getSphericalProperties() : null));
       },
       onError: function (e) {
+        diag('error ' + e.data);
         // 上傳者禁止嵌入:改開電腦版的完整 YouTube 頁面(一樣蓋在上層)
         if (e.data === 101 || e.data === 150 || e.data === 153) {
           location.replace('https://www.youtube.com/watch?v=' + encodeURIComponent(vid) + '&t=' + Math.floor(start) + 's');
