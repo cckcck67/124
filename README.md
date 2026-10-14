@@ -42,8 +42,9 @@ VR 面板是空中遊覽專用的:坐姿、暫停/繼續、重飛、換角度(�
 需要自己的 Google 金鑰(啟用 Maps JavaScript API),在「⚙ 設定」或空中遊覽頁面輸入,只存在手機裡。
 
 **YouTube VR 影片(用 YouTube App 播放)**:YouTube 用手機版身分瀏覽(正常手機排版)。
-打開 360 / VR180 影片時,App 在背景向 YouTube 確認是 VR 影片,網址列會出現「YouTube App」按鈕;
-按下就用 YouTube App 從同一個時間點播放(App 裡的影片先暫停)。
+打開 360 / VR180 影片時,App 在背景向 YouTube 確認是 VR 影片;按影片的全螢幕,就自動改用 YouTube App
+從同一個時間點全螢幕播放(App 裡的影片先暫停),在 YouTube App 按眼鏡圖示就能放進 VR 盒子看。
+也會請 YouTube App 播完自動關閉、回到這個 App(要看 YouTube App 版本是否支援;不支援時用多工鍵切回)。
 App 內建的網頁元件裡,YouTube 的 VR 影片轉動範圍受限、畫面會跳動,所以 VR 影片交給 YouTube App。
 一般影片照舊在 App 裡看,按 VR 用平面模式;全螢幕和一般瀏覽器一樣,不會自動轉向或切換。
 
