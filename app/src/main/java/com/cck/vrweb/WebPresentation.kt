@@ -68,10 +68,6 @@ class WebPresentation(
             "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
                     "Chrome/${chromeMajor(base)}.0.0.0 Mobile Safari/537.36"
 
-        /** 電腦版 Chrome 的識別字串 */
-        fun desktopChromeUserAgent(base: String) =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/${chromeMajor(base)}.0.0.0 Safari/537.36"
     }
 
     /** App 內建頁面(首頁、空中遊覽)要用的 Google 金鑰;由 MainActivity 提供 */
@@ -80,8 +76,6 @@ class WebPresentation(
     var onFullscreen: (Boolean) -> Unit = {}
     /** 網址換了(含 YouTube 這類不重新載入的換頁) */
     var onUrlChanged: (String?) -> Unit = {}
-    /** 診斷紀錄 */
-    var onLog: (String) -> Unit = {}
     /** App 內建頁面的指令(網址 vrweb://指令),例如 vrweb://key = 設定金鑰 */
     var onAppCommand: (String) -> Unit = {}
 
@@ -92,103 +86,9 @@ class WebPresentation(
 
     private var appUa = ""       // 一般網站:App 內網頁(拿掉 wv 標記)
     private var mobileUa = ""    // YouTube:手機版 Chrome
-    private var desktopUa = ""   // 上層 VR 播放器:電腦版 Chrome(官方播放器才能用程式控制看的方向)
-
-    // ---------------- 上層 VR 播放器 ----------------
-
-    /**
-     * 蓋在原本網頁上方的 VR 播放器(YouTube 官方嵌入播放器);原本的網頁留在下面不動。
-     * 關掉時只隱藏、下次重複使用(不在它自己的回呼裡銷毀,避免之後無法再開)
-     */
-    private var overlay: WebView? = null
-    var vrPlayerOpen = false
-        private set
-    /** 實驗:VR 播放器對 YouTube 隱藏觸控等手機特徵(假裝是電腦) */
-    var fakeDesktop = false
-    /** 目前的 VR 播放器是用哪個設定建立的 */
-    var overlayFakeDesktop = false
-        private set
-
-    /** 面板、轉頭等操作的對象:有上層播放器時操作它,否則操作原本的網頁 */
-    private val active: WebView get() = overlay?.takeIf { vrPlayerOpen } ?: webView
 
     /** 原本網頁的影片是否在全螢幕 */
     val isFullscreen get() = customView != null
-
-    @SuppressLint("SetJavaScriptEnabled")
-    fun openVrPlayer(videoId: String, startSec: Double) {
-        if (!::root.isInitialized) return
-        // 「假裝電腦」設定改了:網頁開頭要加的程式不同,重建播放器
-        overlay?.takeIf { overlayFakeDesktop != fakeDesktop }?.let { old ->
-            root.removeView(old)
-            old.destroy()
-            overlay = null
-        }
-        val w = overlay ?: WebView(context).also { w ->
-            with(w.settings) {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                mediaPlaybackRequiresUserGesture = false
-                textZoom = 100
-                userAgentString = desktopUa
-            }
-            blockOrientation(w)
-            try {
-                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                    if (fakeDesktop) WebViewCompat.addDocumentStartJavaScript(w, FAKE_DESKTOP, YOUTUBE_ORIGINS)
-                    WebViewCompat.addDocumentStartJavaScript(w, DIAG_YT, YOUTUBE_ORIGINS)
-                }
-            } catch (e: Throwable) {}
-            overlayFakeDesktop = fakeDesktop
-            w.setBackgroundColor(Color.BLACK)
-            w.webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    val scheme = request.url.scheme ?: return true
-                    return scheme != "http" && scheme != "https"
-                }
-                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
-                    assetLoader.shouldInterceptRequest(request.url)
-                override fun onPageFinished(view: WebView, url: String?) {
-                    if (url != "about:blank") onLog("overlay loaded: " +
-                            (if (url?.startsWith(APP_ORIGIN) == true) "EMBED " else "DESKTOP ") + url)
-                }
-            }
-            // VR 播放器頁面用 console.log('vrdiag: …') 寫診斷紀錄
-            w.webChromeClient = object : WebChromeClient() {
-                override fun onConsoleMessage(m: ConsoleMessage): Boolean {
-                    val t = m.message() ?: return false
-                    if (t.startsWith("vrdiag:")) { onLog("overlay " + t.substring(7).trim()); return true }
-                    return false
-                }
-            }
-            root.addView(w, pageParams())
-            overlay = w
-        }
-        w.bringToFront()
-        w.visibility = View.VISIBLE
-        vrPlayerOpen = true
-        w.loadUrl("$APP_ORIGIN/assets/ytvr.html?v=" + android.net.Uri.encode(videoId) + "&t=" + startSec)
-    }
-
-    /** 關掉上層播放器,回傳看到的時間點(秒;拿不到為 -1) */
-    fun closeVrPlayer(cb: (Double) -> Unit) {
-        val w = overlay
-        if (w == null || !vrPlayerOpen) return cb(-1.0)
-        vrPlayerOpen = false
-        w.evaluateJavascript("(function(){$FIND_VIDEO return v?v.currentTime:-1;})()") { r ->
-            // 停止播放並隱藏,留著下次用
-            w.loadUrl("about:blank")
-            w.visibility = View.GONE
-            cb(r?.toDoubleOrNull() ?: -1.0)
-        }
-    }
-
-    /** 原本網頁的影片跳到某個時間點並暫停(關掉上層播放器後) */
-    fun seekAndPauseMain(sec: Double) {
-        if (!::webView.isInitialized) return
-        webView.evaluateJavascript("(function(){$FIND_VIDEO if(!v)return;" +
-                (if (sec >= 0) "v.currentTime=$sec;" else "") + "v.pause();})()", null)
-    }
 
     /** 離開網頁影片的全螢幕 */
     fun exitFullscreen() {
@@ -246,7 +146,6 @@ class WebPresentation(
             // 部分網站會擋 WebView 標記,移除後較像一般手機瀏覽器
             appUa = userAgentString.replace("; wv", "")
             mobileUa = mobileChromeUserAgent(userAgentString)
-            desktopUa = desktopChromeUserAgent(userAgentString)
             // 字的大小固定 100%,不跟系統字型大小放大(放大會讓網頁排版擠在一起、字被切掉)
             textZoom = 100
             userAgentString = appUa
@@ -388,10 +287,9 @@ class WebPresentation(
 
     class VideoStatus(val current: Double, val duration: Double, val paused: Boolean)
 
-    /** 在目前操作的網頁(上層 VR 播放器或原本的網頁)執行程式 */
     private fun js(code: String, cb: ((String?) -> Unit)? = null) {
         if (!::webView.isInitialized) { cb?.invoke(null); return }
-        active.evaluateJavascript(code) { cb?.invoke(it) }
+        webView.evaluateJavascript(code) { cb?.invoke(it) }
     }
 
     /** 回傳 null = 找不到影片 */
@@ -449,14 +347,9 @@ class WebPresentation(
     /** 執行網頁裡的程式(空中遊覽的指令等),回傳結果字串 */
     fun run(code: String, cb: ((String?) -> Unit)? = null) = js(code, cb)
 
-    /**
-     * 環顧模式看的方向(度):yaw 為 YouTube 的方向(頭右轉 = 減少)、pitch 向上為正,fov = 視野。
-     * 空中遊覽頁面用 vrLook(向右為正, 向上為正);YouTube 用播放器的 setSphericalProperties。
-     */
-    fun lookAt(yaw: Float, pitch: Float, fov: Float, learn: Boolean, cb: ((String?) -> Unit)? = null) {
-        // YouTube(VR 播放器或電腦版頁面)沒有 vrLook:裝上轉頭控制與邊界處理(空中遊覽頁面有自己的 vrLook)
-        js("(function(){if(!window.vrLook){$LOOK_SHIM}" +
-            "if(window.vrLook)return vrLook(${-yaw},$pitch,$fov,$learn);})()", cb)
+    /** 空中遊覽:轉頭控制 3D 地圖看的方向(度,向右為正、向上為正) */
+    fun lookAt(right: Float, up: Float) {
+        js("window.vrLook&&vrLook($right,$up)")
     }
 
     /**
@@ -545,9 +438,6 @@ class WebPresentation(
     }
 
     fun release() {
-        overlay?.destroy()
-        overlay = null
-        vrPlayerOpen = false
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.destroy()
@@ -558,90 +448,9 @@ class WebPresentation(
 // 找出頁面上最主要的影片:正在播放的優先,其次面積最大的
 private const val FIND_VIDEO =
     "var v=null,best=-1;[].forEach.call(document.querySelectorAll('video'),function(x){" +
-    "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});" +
-    "if(!v&&window.vrMedia)v=window.vrMedia;"   // VR 播放器(官方嵌入播放器)
-
-// 電腦版 YouTube 頁面用的 vrLook(和 ytvr.html 相同):設定方向後讀回實際方向,
-// 被彈回原點或卡在邊緣就把那裡記成邊界,之後停在邊界不再超過
-// YouTube 轉頭控制:用播放器的 setSphericalProperties 設定看的方向。
-// 每次設定前讀回實際方向:連續幾次被彈回原點、或卡住不動,就記成邊界(learn = false 時不限制)。
-// 回傳診斷資料:要求yaw,要求pitch,實際yaw,實際pitch,實際fov,左界,右界,下界,上界,事件
-private const val LOOK_SHIM =
-    "var mp=window.vrPlayer||document.getElementById('movie_player');if(!mp||!mp.setSphericalProperties)return;" +
-    "var L={lo:-180,hi:180,plo:-90,phi:90},pend=null,okY=0,okP=0,zY=0,zP=0,stY=0,lastAy=null,ev=[];" +
-    "function sg(a){a=((a%360)+360)%360;return a>180?a-360:a;}" +
-    "function cl(v,a,b){return Math.max(a,Math.min(b,v));}" +
-    "function r1(v){return typeof v==='number'?Math.round(v*10)/10:'';}" +
-    "function limY(q,v){if(q>0)L.hi=Math.max(0,v);else L.lo=Math.min(0,v);}" +
-    "function limP(q,v){if(q>0)L.phi=Math.max(0,v);else L.plo=Math.min(0,v);}" +
-    "window.vrLook=function(right,up,fov,learn){" +
-    "var s=(mp.getSphericalProperties&&mp.getSphericalProperties())||{};" +
-    "var ay=typeof s.yaw==='number'?sg(s.yaw):null,ap=typeof s.pitch==='number'?s.pitch:null;" +
-    "if(pend&&ay!==null){" +
-    "if(Math.abs(ay-pend.y)<=4){okY=pend.y;zY=0;stY=0;}" +
-    "else if(Math.abs(ay)<2&&Math.abs(pend.y)>8){stY=0;if(++zY>=3){ev.push('bounceY req='+r1(pend.y)+' ok='+r1(okY));if(learn)limY(pend.y,okY);zY=0;}}" +
-    "else if(lastAy!==null&&Math.abs(ay-lastAy)<1.5&&Math.abs(pend.y)>Math.abs(ay)){zY=0;if(++stY>=5){ev.push('stuckY req='+r1(pend.y)+' at='+r1(ay));if(learn)limY(pend.y,ay);stY=0;}}" +
-    "else{zY=0;stY=0;}" +
-    "lastAy=ay;}" +
-    "if(pend&&ap!==null){" +
-    "if(Math.abs(ap-pend.p)<=4){okP=pend.p;zP=0;}" +
-    "else if(Math.abs(ap)<2&&Math.abs(pend.p)>8){if(++zP>=3){ev.push('bounceP req='+r1(pend.p)+' ok='+r1(okP));if(learn)limP(pend.p,okP);zP=0;}}" +
-    "else zP=0;}" +
-    "var y=-right,p=up;if(learn){y=cl(y,L.lo,L.hi);p=cl(p,L.plo,L.phi);}" +
-    "var o={yaw:((y%360)+360)%360,pitch:cl(p,-90,90),roll:0};if(fov)o.fov=fov;mp.setSphericalProperties(o);pend={y:sg(y),p:p};" +
-    "return [r1(sg(y)),r1(p),r1(ay),r1(ap),r1(s.fov),L.lo,L.hi,L.plo,L.phi,ev.splice(0).join(';')].join(',');};"
+    "var a=x.offsetWidth*x.offsetHeight+(x.paused?0:1e9);if(x.readyState>0&&a>best){best=a;v=x;}});"
 
 private val YOUTUBE_ORIGINS = setOf("https://youtube.com", "https://*.youtube.com", "https://www.youtube-nocookie.com")
-
-// 實驗「假裝電腦」:對 YouTube 隱藏觸控、手機平台、陀螺儀等特徵
-private const val FAKE_DESKTOP = """(function(){
-try{Object.defineProperty(Navigator.prototype,'maxTouchPoints',{get:function(){return 0},configurable:true});}catch(e){}
-try{Object.defineProperty(Navigator.prototype,'platform',{get:function(){return 'Win32'},configurable:true});}catch(e){}
-try{var b=[{brand:'Chromium',version:'124'},{brand:'Google Chrome',version:'124'}];
-var d={brands:b,mobile:false,platform:'Windows',
-getHighEntropyValues:function(){return Promise.resolve({brands:b,mobile:false,platform:'Windows',platformVersion:'10.0.0',architecture:'x86',bitness:'64',model:'',uaFullVersion:'124.0.0.0',fullVersionList:b});},
-toJSON:function(){return {brands:b,mobile:false,platform:'Windows'};}};
-Object.defineProperty(Navigator.prototype,'userAgentData',{get:function(){return d},configurable:true});}catch(e){}
-['ontouchstart','ontouchend','ontouchmove','ontouchcancel'].forEach(function(k){
-[window,Window.prototype,Document.prototype,HTMLElement.prototype,Element.prototype].forEach(function(o){try{delete o[k];}catch(e){}});});
-['TouchEvent','Touch','TouchList','DeviceOrientationEvent','DeviceMotionEvent','DeviceOrientationAbsoluteEvent'].forEach(function(k){try{delete window[k];}catch(e){}});
-var mm=window.matchMedia;
-window.matchMedia=function(q){var s=String(q).replace(/\(\s*(any-)?(pointer|hover)\s*:\s*(coarse|fine|none|hover)\s*\)/g,function(m,a,f,v){a=a||'';
-if(f==='pointer')return '('+a+'pointer: '+(v==='coarse'?'none':v==='fine'?'coarse':'fine')+')';
-return '('+a+'hover: '+(v==='none'?'hover':'none')+')';});return mm.call(window,s);};
-})();"""
-
-// 診斷:記下 YouTube 看到的裝置特徵、影片格式,以及播放器回報的方向(用 console.log('vrdiag: …') 傳回 App)
-private const val DIAG_YT = """(function(){
-if(window.__vrdiag)return;window.__vrdiag=1;
-function L(t){try{console.log('vrdiag: ['+location.pathname.slice(0,16)+'] '+t);}catch(e){}}
-function env(tag){try{var n=navigator,d=n.userAgentData;
-L(tag+' touch='+n.maxTouchPoints+' ontouch='+('ontouchstart' in window)+' coarse='+matchMedia('(pointer: coarse)').matches+
-' fine='+matchMedia('(pointer: fine)').matches+' hoverNone='+matchMedia('(hover: none)').matches+' platform='+n.platform+
-' uaMobile='+(d?d.mobile:'?')+' uaPlat='+(d?d.platform:'?')+' DOE='+('DeviceOrientationEvent' in window)+
-' scr='+screen.width+'x'+screen.height+' dpr='+devicePixelRatio+' win='+innerWidth+'x'+innerHeight);
-var MS=window.MediaSource;if(MS)L('codecs vp9='+MS.isTypeSupported('video/webm; codecs="vp9"')+
-' av1='+MS.isTypeSupported('video/mp4; codecs="av01.0.08M.08"')+' avc='+MS.isTypeSupported('video/mp4; codecs="avc1.640028"'));
-L('ua '+n.userAgent);}catch(e){L('env err '+e);}}
-env('start');
-var n=0,lastY=null,lastP=0,sent=0;
-var h=setInterval(function(){n++;
-var mp=document.getElementById('movie_player');
-if(mp&&(n==25||n==75||n==150)){
-try{var s=mp.getStatsForNerds?mp.getStatsForNerds():{};var v=document.querySelector('video')||{};
-L('stats '+JSON.stringify({codecs:s.codecs,res:s.resolution,opt:s.optimal_format,vw:v.videoWidth,vh:v.videoHeight}));}catch(e){L('stats err '+e);}
-if(n==25){env('later');
-try{var pr=mp.getPlayerResponse&&mp.getPlayerResponse();var fs=(pr&&pr.streamingData&&pr.streamingData.adaptiveFormats)||[];
-L('formats '+fs.filter(function(f){return f.width;}).map(function(f){return f.itag+':'+(f.mimeType||'').split(';')[0]+':'+
-((f.mimeType||'').match(/codecs="([^".]+)/)||[])[1]+':'+f.width+'x'+f.height+':'+(f.projectionType||'')+':'+(f.stereoLayout||'');}).join(' '));
-}catch(e){L('formats err '+e);}}}
-if(mp&&mp.getSphericalProperties){var p=mp.getSphericalProperties()||{};
-if(typeof p.yaw==='number'){var y=p.yaw>180?p.yaw-360:p.yaw;
-if(lastY===null||Math.abs(y-lastY)>3||Math.abs(p.pitch-lastP)>3){
-if(sent<400){L('poll yaw='+y.toFixed(1)+' pitch='+(+p.pitch).toFixed(1)+' fov='+(+p.fov).toFixed(0));sent++;}
-lastY=y;lastP=p.pitch;}}}
-if(n>3000)clearInterval(h);},200);
-})();"""
 
 // 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
 private const val BLOCK_ORIENTATION =
