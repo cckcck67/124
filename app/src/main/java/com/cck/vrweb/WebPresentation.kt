@@ -90,12 +90,23 @@ class WebPresentation(
     /** 原本網頁的影片是否在全螢幕 */
     val isFullscreen get() = customView != null
 
-    /** 離開網頁影片的全螢幕 */
+    /**
+     * 離開網頁影片的全螢幕:先請網頁自己離開(網頁和瀏覽器的全螢幕狀態才會一致,之後還能再全螢幕);
+     * 網頁沒反應才直接收起全螢幕畫面
+     */
     fun exitFullscreen() {
-        if (customView == null) return
-        val cb = customCallback
-        removeCustomView()
-        cb?.onCustomViewHidden()
+        if (customView == null || !::webView.isInitialized) return
+        webView.evaluateJavascript("(function(){var d=document;if(d.fullscreenElement&&d.exitFullscreen)" +
+                "{d.exitFullscreen();return 1;}if(d.webkitFullscreenElement&&d.webkitExitFullscreen)" +
+                "{d.webkitExitFullscreen();return 1;}return 0;})()", null)
+        val view = customView
+        webView.postDelayed({
+            if (customView != null && customView === view) {
+                val cb = customCallback
+                removeCustomView()
+                cb?.onCustomViewHidden()
+            }
+        }, 600)
     }
 
     /** 不讓網頁自己用手機陀螺儀轉動 VR 影片視角(改由 App 依頭部方向控制) */
