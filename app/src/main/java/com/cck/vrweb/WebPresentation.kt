@@ -103,6 +103,11 @@ class WebPresentation(
     private var overlay: WebView? = null
     var vrPlayerOpen = false
         private set
+    /** 實驗:VR 播放器對 YouTube 隱藏觸控等手機特徵(假裝是電腦) */
+    var fakeDesktop = false
+    /** 目前的 VR 播放器是用哪個設定建立的 */
+    var overlayFakeDesktop = false
+        private set
 
     /** 面板、轉頭等操作的對象:有上層播放器時操作它,否則操作原本的網頁 */
     private val active: WebView get() = overlay?.takeIf { vrPlayerOpen } ?: webView
@@ -113,6 +118,12 @@ class WebPresentation(
     @SuppressLint("SetJavaScriptEnabled")
     fun openVrPlayer(videoId: String, startSec: Double) {
         if (!::root.isInitialized) return
+        // 「假裝電腦」設定改了:網頁開頭要加的程式不同,重建播放器
+        overlay?.takeIf { overlayFakeDesktop != fakeDesktop }?.let { old ->
+            root.removeView(old)
+            old.destroy()
+            overlay = null
+        }
         val w = overlay ?: WebView(context).also { w ->
             with(w.settings) {
                 javaScriptEnabled = true
@@ -122,6 +133,13 @@ class WebPresentation(
                 userAgentString = desktopUa
             }
             blockOrientation(w)
+            try {
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    if (fakeDesktop) WebViewCompat.addDocumentStartJavaScript(w, FAKE_DESKTOP, YOUTUBE_ORIGINS)
+                    WebViewCompat.addDocumentStartJavaScript(w, DIAG_YT, YOUTUBE_ORIGINS)
+                }
+            } catch (e: Throwable) {}
+            overlayFakeDesktop = fakeDesktop
             w.setBackgroundColor(Color.BLACK)
             w.webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -184,8 +202,7 @@ class WebPresentation(
     private fun blockOrientation(w: WebView) {
         try {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(w, BLOCK_ORIENTATION,
-                    setOf("https://youtube.com", "https://*.youtube.com", "https://www.youtube-nocookie.com"))
+                WebViewCompat.addDocumentStartJavaScript(w, BLOCK_ORIENTATION, YOUTUBE_ORIGINS)
             }
         } catch (e: Throwable) {}
     }
@@ -573,6 +590,58 @@ private const val LOOK_SHIM =
     "var y=-right,p=up;if(learn){y=cl(y,L.lo,L.hi);p=cl(p,L.plo,L.phi);}" +
     "var o={yaw:((y%360)+360)%360,pitch:cl(p,-90,90),roll:0};if(fov)o.fov=fov;mp.setSphericalProperties(o);pend={y:sg(y),p:p};" +
     "return [r1(sg(y)),r1(p),r1(ay),r1(ap),r1(s.fov),L.lo,L.hi,L.plo,L.phi,ev.splice(0).join(';')].join(',');};"
+
+private val YOUTUBE_ORIGINS = setOf("https://youtube.com", "https://*.youtube.com", "https://www.youtube-nocookie.com")
+
+// 實驗「假裝電腦」:對 YouTube 隱藏觸控、手機平台、陀螺儀等特徵
+private const val FAKE_DESKTOP = """(function(){
+try{Object.defineProperty(Navigator.prototype,'maxTouchPoints',{get:function(){return 0},configurable:true});}catch(e){}
+try{Object.defineProperty(Navigator.prototype,'platform',{get:function(){return 'Win32'},configurable:true});}catch(e){}
+try{var b=[{brand:'Chromium',version:'124'},{brand:'Google Chrome',version:'124'}];
+var d={brands:b,mobile:false,platform:'Windows',
+getHighEntropyValues:function(){return Promise.resolve({brands:b,mobile:false,platform:'Windows',platformVersion:'10.0.0',architecture:'x86',bitness:'64',model:'',uaFullVersion:'124.0.0.0',fullVersionList:b});},
+toJSON:function(){return {brands:b,mobile:false,platform:'Windows'};}};
+Object.defineProperty(Navigator.prototype,'userAgentData',{get:function(){return d},configurable:true});}catch(e){}
+['ontouchstart','ontouchend','ontouchmove','ontouchcancel'].forEach(function(k){
+[window,Window.prototype,Document.prototype,HTMLElement.prototype,Element.prototype].forEach(function(o){try{delete o[k];}catch(e){}});});
+['TouchEvent','Touch','TouchList','DeviceOrientationEvent','DeviceMotionEvent','DeviceOrientationAbsoluteEvent'].forEach(function(k){try{delete window[k];}catch(e){}});
+var mm=window.matchMedia;
+window.matchMedia=function(q){var s=String(q).replace(/\(\s*(any-)?(pointer|hover)\s*:\s*(coarse|fine|none|hover)\s*\)/g,function(m,a,f,v){a=a||'';
+if(f==='pointer')return '('+a+'pointer: '+(v==='coarse'?'none':v==='fine'?'coarse':'fine')+')';
+return '('+a+'hover: '+(v==='none'?'hover':'none')+')';});return mm.call(window,s);};
+})();"""
+
+// 診斷:記下 YouTube 看到的裝置特徵、影片格式,以及播放器回報的方向(用 console.log('vrdiag: …') 傳回 App)
+private const val DIAG_YT = """(function(){
+if(window.__vrdiag)return;window.__vrdiag=1;
+function L(t){try{console.log('vrdiag: ['+location.pathname.slice(0,16)+'] '+t);}catch(e){}}
+function env(tag){try{var n=navigator,d=n.userAgentData;
+L(tag+' touch='+n.maxTouchPoints+' ontouch='+('ontouchstart' in window)+' coarse='+matchMedia('(pointer: coarse)').matches+
+' fine='+matchMedia('(pointer: fine)').matches+' hoverNone='+matchMedia('(hover: none)').matches+' platform='+n.platform+
+' uaMobile='+(d?d.mobile:'?')+' uaPlat='+(d?d.platform:'?')+' DOE='+('DeviceOrientationEvent' in window)+
+' scr='+screen.width+'x'+screen.height+' dpr='+devicePixelRatio+' win='+innerWidth+'x'+innerHeight);
+var MS=window.MediaSource;if(MS)L('codecs vp9='+MS.isTypeSupported('video/webm; codecs="vp9"')+
+' av1='+MS.isTypeSupported('video/mp4; codecs="av01.0.08M.08"')+' avc='+MS.isTypeSupported('video/mp4; codecs="avc1.640028"'));
+L('ua '+n.userAgent);}catch(e){L('env err '+e);}}
+env('start');
+var n=0,lastY=null,lastP=0,sent=0;
+var h=setInterval(function(){n++;
+var mp=document.getElementById('movie_player');
+if(mp&&(n==25||n==75||n==150)){
+try{var s=mp.getStatsForNerds?mp.getStatsForNerds():{};var v=document.querySelector('video')||{};
+L('stats '+JSON.stringify({codecs:s.codecs,res:s.resolution,opt:s.optimal_format,vw:v.videoWidth,vh:v.videoHeight}));}catch(e){L('stats err '+e);}
+if(n==25){env('later');
+try{var pr=mp.getPlayerResponse&&mp.getPlayerResponse();var fs=(pr&&pr.streamingData&&pr.streamingData.adaptiveFormats)||[];
+L('formats '+fs.filter(function(f){return f.width;}).map(function(f){return f.itag+':'+(f.mimeType||'').split(';')[0]+':'+
+((f.mimeType||'').match(/codecs="([^".]+)/)||[])[1]+':'+f.width+'x'+f.height+':'+(f.projectionType||'')+':'+(f.stereoLayout||'');}).join(' '));
+}catch(e){L('formats err '+e);}}}
+if(mp&&mp.getSphericalProperties){var p=mp.getSphericalProperties()||{};
+if(typeof p.yaw==='number'){var y=p.yaw>180?p.yaw-360:p.yaw;
+if(lastY===null||Math.abs(y-lastY)>3||Math.abs(p.pitch-lastP)>3){
+if(sent<400){L('poll yaw='+y.toFixed(1)+' pitch='+(+p.pitch).toFixed(1)+' fov='+(+p.fov).toFixed(0));sent++;}
+lastY=y;lastP=p.pitch;}}}
+if(n>3000)clearInterval(h);},200);
+})();"""
 
 // 擋掉網頁的陀螺儀事件(在網頁自己的程式之前先攔下)
 private const val BLOCK_ORIENTATION =

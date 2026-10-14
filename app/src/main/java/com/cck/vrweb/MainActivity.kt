@@ -705,7 +705,8 @@ class MainActivity : Activity(), SensorEventListener {
         flatSettings +
             Setting("ytgain", "轉頭比例", 0.05f, 0.2f, 2f, "%.2f", { 1f }) { ytGain = it; lastYtYaw = 999f } +
             Setting("ytfov", "YT視野", 2f, 40f, 140f, "%.0f度", { 100f }) { ytFov = it; lastYtYaw = 999f } +
-            Setting("ytlearn", "邊界學習", 1f, 0f, 1f, ONOFF, { 1f }) { ytLearn = it >= 0.5f; lastYtYaw = 999f }
+            Setting("ytlearn", "邊界學習", 1f, 0f, 1f, ONOFF, { 1f }) { ytLearn = it >= 0.5f; lastYtYaw = 999f } +
+            Setting("ytdesk", "假裝電腦", 1f, 0f, 1f, ONOFF, { 0f }) { setFakeDesktop(it >= 0.5f) }
     }
 
     // 空中遊覽自己的設定(和影片的 VR 設定分開存,不會互相影響)
@@ -1217,11 +1218,32 @@ class MainActivity : Activity(), SensorEventListener {
      * 開啟上層 VR 播放器:原本網頁的影片離開全螢幕並暫停,
      * VR 播放器從同一個時間點接著播(轉成橫式)
      */
+    private fun fakeDesktopPref() = prefs.getFloat("m${VrRenderer.MODE_YT}_ytdesk", 0f) >= 0.5f
+
+    /** 實驗「假裝電腦」切換:VR 播放器開著就從目前的時間點重新開啟 */
+    private fun setFakeDesktop(on: Boolean) {
+        val p = presentation ?: return
+        if (!p.vrPlayerOpen || p.overlayFakeDesktop == on) return
+        val id = youtubeId(p.currentUrl) ?: return
+        p.videoStatus { st ->
+            val t = st?.current ?: 0.0
+            p.closeVrPlayer {
+                handler.post {
+                    p.fakeDesktop = on
+                    Diag.log("reopen VR player $id t=$t fakeDesktop=$on")
+                    p.openVrPlayer(id, t)
+                    lastYtYaw = 999f
+                }
+            }
+        }
+    }
+
     private fun openYouTubeVr(p: WebPresentation) {
         val id = youtubeId(p.currentUrl) ?: return
         p.videoStatus { st ->
             val t = st?.current ?: 0.0
-            Diag.log("open VR player $id t=$t")
+            p.fakeDesktop = fakeDesktopPref()
+            Diag.log("open VR player $id t=$t fakeDesktop=${p.fakeDesktop}")
             p.exitFullscreen()
             p.pauseAll()
             p.openVrPlayer(id, t)
