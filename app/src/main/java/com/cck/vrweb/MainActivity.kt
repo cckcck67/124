@@ -75,6 +75,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val SCREEN_VIDEO = 3
 
         const val REQ_PICK_VIDEO = 11
+        const val REQ_YOUTUBE = 12
 
         const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
@@ -1180,14 +1181,17 @@ class MainActivity : Activity(), SensorEventListener {
             val intent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")
                 .putExtra("force_fullscreen", true)
                 .putExtra("finish_on_ended", true)
-            // 先離開全螢幕、暫停(App 還在前景,網頁的全螢幕狀態才會正確結束),再開 YouTube App
-            p.exitFullscreen()
-            p.pauseAll()
+            // 用「等結果」的方式開啟:YouTube App 會開在這個 App 的同一疊畫面裡,關閉後回到這裡
             try {
-                startActivity(intent)
+                @Suppress("DEPRECATION")
+                startActivityForResult(intent, REQ_YOUTUBE)
             } catch (e: Exception) {
                 toast("找不到 YouTube App")
+                return@videoStatus
             }
+            // 網頁離開全螢幕(請網頁自己離開,之後還能再全螢幕)並暫停
+            p.exitFullscreen()
+            p.pauseAll()
         }
     }
 
