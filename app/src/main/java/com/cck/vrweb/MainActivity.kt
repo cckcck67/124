@@ -1158,9 +1158,16 @@ class MainActivity : Activity(), SensorEventListener {
         val url = p.currentUrl
         val id = youtubeId(url) ?: return
         youtubeProjection(url) { proj ->
-            if (!proj.isNullOrEmpty() && p.isFullscreen && !vrMode && youtubeId(p.currentUrl) == id) openInYouTubeApp(p, id)
+            if (proj.isNullOrEmpty() || !p.isFullscreen || vrMode || youtubeId(p.currentUrl) != id) return@youtubeProjection
+            // 剛交給 YouTube App 又馬上觸發(例如回來時網頁還在全螢幕)就不重複開
+            val now = SystemClock.uptimeMillis()
+            if (now - lastYtAppAt < 3000) return@youtubeProjection
+            lastYtAppAt = now
+            openInYouTubeApp(p, id)
         }
     }
+
+    private var lastYtAppAt = 0L
 
     /**
      * 用 YouTube App 從目前的時間點全螢幕播放(App 裡的影片離開全螢幕並暫停)。
@@ -1173,12 +1180,13 @@ class MainActivity : Activity(), SensorEventListener {
             val intent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")
                 .putExtra("force_fullscreen", true)
                 .putExtra("finish_on_ended", true)
+            // 先離開全螢幕、暫停(App 還在前景,網頁的全螢幕狀態才會正確結束),再開 YouTube App
+            p.exitFullscreen()
+            p.pauseAll()
             try {
                 startActivity(intent)
-                p.exitFullscreen()
-                p.pauseAll()
             } catch (e: Exception) {
-                toast("找不到 YouTube App,在這裡播放")
+                toast("找不到 YouTube App")
             }
         }
     }
