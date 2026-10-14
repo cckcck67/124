@@ -77,6 +77,8 @@ class WebPresentation(
     var appKey: () -> String = { "" }
     /** 網頁影片進入 / 離開全螢幕 */
     var onFullscreen: (Boolean) -> Unit = {}
+    /** 網址換了(含 YouTube 這類不重新載入的換頁) */
+    var onUrlChanged: (String?) -> Unit = {}
     /** App 內建頁面的指令(網址 vrweb://指令),例如 vrweb://key = 設定金鑰 */
     var onAppCommand: (String) -> Unit = {}
 
@@ -240,6 +242,10 @@ class WebPresentation(
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
                 assetLoader.shouldInterceptRequest(request.url)
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                onUrlChanged(url)
+            }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 // 內建頁面:把金鑰交給網頁(只給 App 自己的頁面)
