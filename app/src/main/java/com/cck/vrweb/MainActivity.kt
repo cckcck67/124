@@ -227,6 +227,8 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 介面 ----------------
 
     private lateinit var starButton: Button
+    private lateinit var vrPlayerButton: Button       // YouTube 的 VR 影片:自己按才開 VR 播放器
+    private var ytVrVideo = false                    // 目前網頁是 YouTube 的 360 / VR180 影片
     private lateinit var titleLabel: TextView
     private lateinit var overlayHost: FrameLayout      // 首頁 / 設定 / 我的影片(蓋在網頁上方)
 
@@ -249,6 +251,9 @@ class MainActivity : Activity(), SensorEventListener {
             setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
         starButton = button("★") { showBookmarks() }
+        vrPlayerButton = button("VR 播放器") {
+            presentation?.let { if (!it.vrPlayerOpen) openYouTubeVr(it) }
+        }.apply { visibility = View.GONE }
         titleLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 18f
@@ -263,6 +268,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(button("首頁") { goHome() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(titleLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(vrPlayerButton)
             addView(starButton)
             addView(button("VR") { setVr(true) })
         }
@@ -782,6 +788,8 @@ class MainActivity : Activity(), SensorEventListener {
         val web = screen == SCREEN_WEB
         urlInput.visibility = if (web) View.VISIBLE else View.GONE
         starButton.visibility = if (web) View.VISIBLE else View.GONE
+        vrPlayerButton.visibility =
+            if (web && ytVrVideo && presentation?.vrPlayerOpen != true) View.VISIBLE else View.GONE
         titleLabel.visibility = if (web) View.GONE else View.VISIBLE
         val show = when (screen) {
             SCREEN_HOME -> false
@@ -952,7 +960,7 @@ class MainActivity : Activity(), SensorEventListener {
         presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
-            it.onFullscreen = { on -> onWebFullscreen(on) }
+            it.onUrlChanged = { url -> checkYouTubeVr(url) }
             it.show()
             it.loadUrl(url, resumeAt)
         }
@@ -1082,28 +1090,15 @@ class MainActivity : Activity(), SensorEventListener {
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
         // 先在背景直接問 YouTube 這部影片的格式(最準);問不到再從網頁裡判斷
         val url = p.currentUrl
-        if (p.vrPlayerOpen) { applyYouTubeProjection(p, "VR"); return }   // 已經在 VR 播放器裡
-        if (WebPresentation.isYouTube(url)) {
-            youtubeProjection(url) { proj ->
-                if (proj != null) applyYouTubeProjection(p, proj)
-                else p.youtubeSpherical { applyYouTubeProjection(p, it) }
-            }
+        if (p.vrPlayerOpen) {   // 已經在 VR 播放器裡 → 環顧
+            if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
+            handler.postDelayed({ if (vrMode) showMessage("環顧", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
             return
         }
         detectByAspect(p)
-    }
-
-    /** 依 YouTube 影片格式選模式:VR 影片 → 環顧(換成電腦版播放器);一般影片 → 依比例判斷 */
-    private fun applyYouTubeProjection(p: WebPresentation, proj: String) {
-        val yt = proj.isNotEmpty()
-        if (yt) {
-            // 環顧用上層的 VR 播放器(官方嵌入播放器),原本的網頁留在下面不動
-            if (!p.vrPlayerOpen) openYouTubeVr(p)
-            if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
-        } else detectByAspect(p)
-        // 告訴使用者偵測結果(等置中倒數結束再顯示)
-        handler.postDelayed({
-            if (vrMode) showMessage(if (yt) "環顧" else "YouTube", if (yt) "轉頭看看" else "平面影片", 2500)
+        // VR 影片但沒開 VR 播放器:不自動切換,只提醒(先退出 VR,按網址列的「VR 播放器」)
+        if (screen == SCREEN_WEB && ytVrVideo) handler.postDelayed({
+            if (vrMode) showMessage("VR 影片", "請先按網址列「VR 播放器」", 3500)
         }, ENTER_DELAY_MS + 300)
     }
 
@@ -1151,26 +1146,30 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     /**
-     * 網頁影片全螢幕:轉成橫式;YouTube 的 360 / VR180 影片先換成電腦版播放器,
-     * 進 VR 就能直接轉頭環顧(一般影片不受影響,不會重新載入)
+     * 網址換了:如果是 YouTube 的 360 / VR180 影片,網址列出現「VR 播放器」按鈕(自己按才開)。
+     * 全螢幕不再自動轉向或切換,和一般瀏覽器一樣。
      */
-    private fun onWebFullscreen(on: Boolean) {
-        if (vrMode) return
-        val p = presentation
-        if (on) {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            val url = p?.currentUrl
-            if (p != null && screen == SCREEN_WEB && WebPresentation.isYouTube(url) && !p.vrPlayerOpen) {
-                youtubeProjection(url) { proj ->
-                    if (!proj.isNullOrEmpty() && !vrMode && !p.vrPlayerOpen) {
-                        openYouTubeVr(p)
-                        toast("VR 影片:已開啟 VR 播放器,可手指拖動環顧、按 VR 轉頭環顧,按返回關閉")
-                    }
-                }
+    private fun checkYouTubeVr(url: String?) {
+        val id = youtubeId(url)
+        if (id == null) {
+            if (ytVrVideo) { ytVrVideo = false; updateTopBar() }
+            return
+        }
+        fun apply(proj: String?) {
+            if (youtubeId(presentation?.currentUrl) != id) return   // 已經換到別的網頁
+            val vr = !proj.isNullOrEmpty()
+            if (vr == ytVrVideo) return
+            ytVrVideo = vr
+            if (vr && screen == SCREEN_WEB && !vrMode) {
+                barShown = true
+                toast("這是 VR 影片:想轉頭環顧可按網址列的「VR 播放器」")
             }
-        } else if (p?.vrPlayerOpen != true) {
-            // 離開全螢幕就跟著手機方向(開著 VR 播放器時維持橫式)
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            updateTopBar()
+        }
+        // 先在背景問 YouTube(最準);問不到(沒網路等)等網頁載入後從網頁裡判斷
+        youtubeProjection(url) { proj ->
+            if (proj != null) apply(proj)
+            else handler.postDelayed({ presentation?.youtubeSpherical { apply(it) } }, 3000)
         }
     }
 
@@ -1186,13 +1185,14 @@ class MainActivity : Activity(), SensorEventListener {
             p.pauseAll()
             p.openVrPlayer(id, t)
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            updateTopBar()
         }
     }
 
     /** 關掉上層 VR 播放器:原本網頁的影片跳到看到的時間點並暫停 */
     private fun closeYouTubeVr() {
         val p = presentation ?: return
-        p.closeVrPlayer { t -> p.seekAndPauseMain(t) }
+        p.closeVrPlayer { t -> p.seekAndPauseMain(t); updateTopBar() }
         if (!vrMode) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     }
 
