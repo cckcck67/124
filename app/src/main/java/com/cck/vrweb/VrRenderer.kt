@@ -139,6 +139,40 @@ class VrRenderer(
             }
         """
 
+        // 曲面巨幕:影片貼在圍著自己的圓弧螢幕上(固定在空間中,轉頭看左右)
+        // uArc = 螢幕左右張開的角度(弧度)、uH = 螢幕高度(以半徑為 1 計)、uLift = 螢幕往上移
+        private const val FS_CURVE = """
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
+            precision mediump float;
+            #endif
+            uniform SAMPLER uTex;
+            uniform mat4 uSt;
+            uniform mat3 uHead;
+            uniform vec2 uTan;
+            uniform float uK;
+            uniform vec4 uSrc;
+            uniform float uArc;
+            uniform float uH;
+            uniform float uLift;
+            varying vec2 vUv;
+            void main() {
+                vec2 c = vUv * 2.0 - 1.0;
+                c *= 1.0 + uK * dot(c, c) * 0.25;
+                vec3 d = uHead * vec3(c.x * uTan.x, c.y * uTan.y, 1.0);
+                float lon = atan(d.x, d.z);
+                float y = d.y / max(length(d.xz), 1e-4);
+                vec2 uv = vec2(lon / uArc + 0.5, (y - uLift) / uH + 0.5);
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
+                uv = uv * uSrc.xy + uSrc.zw;
+                gl_FragColor = SAMPLE(uv);
+            }
+        """
+
         // 游標 + 面板,套用相同的鏡片校正,輸出預乘 alpha
         private const val OVERLAY_FS = """
             precision mediump float;
@@ -182,7 +216,10 @@ class VrRenderer(
     @Volatile var ipd = 0f          // 左右間距偏移(佔單眼寬度比例,負 = 往中間靠)
     @Volatile var zoom = 1.4f       // 平面模式畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
     @Volatile var distortion = 0.15f // 桶形校正強度
-    @Volatile var tilt = 0f         // 兩眼畫面左右翻轉角度(弧度,左右眼相反方向)
+    @Volatile var curve = 0f        // 曲面巨幕:螢幕張開的角度(度);0 = 一般平面畫面(跟著頭)
+
+    /** 目前是曲面巨幕(2D / 左右3D 且有設定弧度):畫面固定在空間中,需要頭部方向 */
+    fun isCurved() = curve > 0.5f && (mode == MODE_2D || mode == MODE_SBS)
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
     @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
     // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影(每個模式各自設定)
@@ -248,11 +285,15 @@ class VrRenderer(
         val uHead = GLES20.glGetUniformLocation(id, "uHead")
         val uTan = GLES20.glGetUniformLocation(id, "uTan")
         val uLon = GLES20.glGetUniformLocation(id, "uLon")
+        val uArc = GLES20.glGetUniformLocation(id, "uArc")
+        val uH = GLES20.glGetUniformLocation(id, "uH")
+        val uLift = GLES20.glGetUniformLocation(id, "uLift")
     }
 
     // [0] = 直接用 OES 材質,[1] = 用 Mipmap 的 2D 材質
     private lateinit var flatProg: Array<Prog>
     private lateinit var sphereProg: Array<Prog>
+    private lateinit var curveProg: Array<Prog>
     private lateinit var blitProg: Prog
 
     // Mipmap 用的複製材質
@@ -328,6 +369,7 @@ class VrRenderer(
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         flatProg = arrayOf(Prog(buildProgram(VIDEO_VS, OES_HEAD + FS)), Prog(buildProgram(VIDEO_VS, TEX2D_HEAD + FS)))
         sphereProg = arrayOf(Prog(buildProgram(VS, OES_HEAD + FS_180)), Prog(buildProgram(VS, TEX2D_HEAD + FS_180)))
+        curveProg = arrayOf(Prog(buildProgram(VS, OES_HEAD + FS_CURVE)), Prog(buildProgram(VS, TEX2D_HEAD + FS_CURVE)))
         blitProg = Prog(buildProgram(VS, OES_HEAD + BLIT_FS))
 
         // 2D 材質的 Mipmap 需要非 2 次方尺寸支援(OpenGL ES 3 以上或對應擴充)
@@ -531,6 +573,9 @@ class VrRenderer(
                 GLES20.glViewport((cx - eyeW / 2f).toInt(), 0, eyeW, viewH)
                 val lon = if (m == MODE_TB360) 0.5 / Math.PI else 1.0 / Math.PI
                 drawSphere(sx, sy, ox, oy, eyeW.toFloat() / viewH, lon.toFloat())
+            } else if (isCurved()) {
+                GLES20.glViewport((cx - eyeW / 2f).toInt(), 0, eyeW, viewH)
+                drawCurve(sx, sy, ox, oy, eyeW.toFloat() / viewH)
             } else {
                 val z = zoom
                 val vy = cy + lift * viewH
@@ -538,7 +583,7 @@ class VrRenderer(
                     (cx - r[2] * z / 2f).toInt(), (vy - r[3] * z / 2f).toInt(),
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
-                drawVideo(distortion, -side * tilt, sx, sy, ox, oy)
+                drawVideo(distortion, 0f, sx, sy, ox, oy)
             }
             // 控制面板與游標不放大、不移動,確保完整看得到;
             // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
@@ -580,6 +625,27 @@ class VrRenderer(
         GLES20.glUniform2f(p.uTan, tx, tx / aspect)
         GLES20.glUniform4f(p.uSrc, sx, sy, ox, oy)
         GLES20.glUniform1f(p.uLon, lonScale)
+        bindQuad(p.aPos, p.aUv)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+    }
+
+    /** 曲面巨幕:螢幕寬度 = 張開的角度,高度依影片比例 */
+    private fun drawCurve(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float) {
+        val p = curveProg[if (useMip) 1 else 0]
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glUseProgram(p.id)
+        bindVideoTexture(p)
+        GLES20.glUniform1f(p.uK, distortion)
+        GLES20.glUniformMatrix3fv(p.uHead, 1, false, head, 0)
+        val tx = tan(Math.toRadians(fovDeg / 2.0)).toFloat()
+        GLES20.glUniform2f(p.uTan, tx, tx / aspect)
+        GLES20.glUniform4f(p.uSrc, sx, sy, ox, oy)
+        val arc = Math.toRadians(curve.toDouble()).toFloat()
+        val videoAspect = (sx * srcW) / (sy * srcH).coerceAtLeast(1e-6f)
+        val h = arc / videoAspect.coerceAtLeast(0.1f)
+        GLES20.glUniform1f(p.uArc, arc)
+        GLES20.glUniform1f(p.uH, h)
+        GLES20.glUniform1f(p.uLift, lift * h)
         bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
