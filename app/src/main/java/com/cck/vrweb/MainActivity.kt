@@ -678,7 +678,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun sendFlightConfig() {
-        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt)")
+        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode)")
     }
 
     private fun modeSettings(m: Int) = when {
@@ -1040,6 +1040,7 @@ class MainActivity : Activity(), SensorEventListener {
         updatePageSize()
         updateTopBar()
         menu.buttons = if (screen == SCREEN_FLIGHT) VrMenu.FLIGHT_BUTTONS else VrMenu.VIDEO_BUTTONS
+        sendFlightConfig()   // 空中遊覽:告訴網頁現在是 VR(轉頭看)還是 2D(手勢)
         menu.infoText = null
         reverseLandscape = displayRotation() == Surface.ROTATION_270
         needLevelRef = true

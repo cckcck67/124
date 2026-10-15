@@ -22,24 +22,40 @@
   #title { position: fixed; left: 0; right: 0; top: 3vh; text-align: center; font-size: 5vmin;
            text-shadow: 0 0 1vh #000, 0 0 2vh #000; pointer-events: none; transition: opacity 2s; }
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.6s; }
-  #pickBar { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
-             align-items: center; padding: 2.5vmin; background: rgba(17,17,17,0.92); }
-  #pickBar button { font-size: 4vmin; padding: 2vmin 4vmin; border: 0; border-radius: 1.5vmin; background: #2f5a88; color: #fff; }
+  #pickBar, #ctl { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
+                   align-items: center; padding: 2.5vmin; background: rgba(17,17,17,0.85); }
+  #pickBar button, #ctl button { font-size: 3.8vmin; padding: 1.8vmin 3.5vmin; border: 0; border-radius: 1.5vmin; background: #2f5a88; color: #fff; }
+  #ctl #cResume { background: #8a5a2f; }
   #pickBar input { font-size: 4vmin; padding: 1.5vmin; width: 40vmin; }
   #pickHint { position: fixed; left: 0; right: 0; top: 0; padding: 2vmin; text-align: center; font-size: 4vmin;
               background: rgba(17,17,17,0.85); display: none; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 12vmin; height: 12vmin; margin: -6vmin 0 0 -6vmin; display: none;
+           pointer-events: none; }
+  #cross::before, #cross::after { content: ''; position: absolute; background: #f33; box-shadow: 0 0 0.6vmin #000; }
+  #cross::before { left: 50%; top: 0; bottom: 0; width: 0.8vmin; margin-left: -0.4vmin; }
+  #cross::after { top: 50%; left: 0; right: 0; height: 0.8vmin; margin-top: -0.4vmin; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="sv"></div>
 <div id="pick"></div>
-<div id="pickHint">移動、縮放地圖,點一下想去的地方</div>
+<div id="cross"></div>
+<div id="pickHint">拖動、縮放地圖,讓中間的紅色十字對準想去的地方(點一下也會移過去)</div>
 <div id="pickBar">
   <input id="pname" placeholder="地點名稱(存起來用)">
   <button id="pickGo">從這裡起飛</button>
   <button id="pickSave">存成地點</button>
   <button id="pickCancel">取消</button>
+</div>
+<!-- 2D 畫面的控制列(VR 裡用面板,不顯示) -->
+<div id="ctl">
+  <button id="cResume">回到航線</button>
+  <button id="cPause">暫停</button>
+  <button id="cNext">換角度</button>
+  <button id="cLand">降落</button>
+  <button id="cPick">地圖</button>
+  <button id="cMenu">目的地</button>
 </div>
 <div id="title"></div>
 <div id="fade"></div>
@@ -67,14 +83,18 @@ var M_PER_DEG = 111320;
 var key = '', map = null, place = null;
 var leg = 0;             // 第幾個方向接近(每次「換角度」轉 90 度)
 var progress = 0;        // 0 = 出發點,1 = 懸停點
-var paused = false, last = 0;
+var paused = false, last = 0, looping = false;
 var speed = 1, altScale = 1;
+var vr = false;                   // App 是否在 VR 模式(VR 裡轉頭看,2D 用手勢)
+var manual = false;               // 2D 時用手勢移動了地圖:自動飛行先停住,不再蓋掉手勢
 var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
 var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設面向
-var pickMap = null, pickMarker = null, picked = null;
+var pickMap = null;
 
 function $(id) { return document.getElementById(id); }
 function msg(html) { $('msg').innerHTML = html; }
+function menuShown() { return $('menu').style.display !== 'none'; }
+function picking() { return $('pick').style.display === 'block'; }
 
 function flash(text) {
   var t = $('title');
@@ -83,6 +103,12 @@ function flash(text) {
   clearTimeout(flash.timer);
   flash.timer = setTimeout(function () { t.style.opacity = 0; }, 4000);
 }
+
+// 沒預料到的錯誤直接顯示出來,方便回報
+window.addEventListener('error', function (e) {
+  var text = '發生錯誤:' + (e && e.message ? e.message : e);
+  if (menuShown()) msg(text); else flash(text);
+});
 
 // ---------------- App 介面 ----------------
 
@@ -96,34 +122,44 @@ window.vrSetKey = function (k) {
   msg('');
 };
 
-// App 傳入頭的方向、飛行設定、指令
+// App 傳入頭的方向、飛行設定(速度、高度、是否在 VR)、指令
 window.vrLook = function (yaw, pitch) { lookYaw = yaw; lookPitch = pitch; };
-window.vrFlightConfig = function (s, a) { speed = s; altScale = a; };
+window.vrFlightConfig = function (s, a, v) {
+  speed = s; altScale = a;
+  if (v === undefined || !!v === vr) return;
+  vr = !!v;
+  if (vr) manual = false;      // VR 裡沒辦法用手勢,回到自動飛行
+  else { lookYaw = 0; lookPitch = 0; }
+  refreshCtl();
+};
 window.vrFlight = function (cmd) {
   if (!place) return false;
   if (cmd === 'land') { landed ? takeOff() : land(); return true; }
   if (landed) return true;   // 在地面上時,飛行指令先不動作
-  if (cmd === 'pause') paused = !paused;
-  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; });
-  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; });
+  if (cmd === 'pause') { if (manual) resume(); else paused = !paused; }
+  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; });
+  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; });
+  else if (cmd === 'resume') resume();
+  refreshCtl();
   return true;
 };
 // 面板顯示用的狀態
 window.vrFlightState = function () {
-  return place ? { name: place.name, paused: paused, arrived: progress >= 1, landed: landed } : null;
+  return place ? { name: place.name, paused: paused || manual, arrived: progress >= 1, landed: landed, manual: manual } : null;
 };
-// 返回鍵:地面 → 起飛;空中 → 目的地選單;選地圖 → 選單;已在選單回傳 false(App 回首頁)
+// 返回鍵:選地圖 → 回去;地面 → 起飛;手動移動中 → 回到航線;空中 → 目的地選單;已在選單回傳 false(App 回首頁)
 window.vrBack = function () {
-  if ($('pick').style.display === 'block') { closePick(); return true; }
+  if (picking()) { closePick(); return true; }
   if (!place) return false;
   if (landed) { takeOff(); return true; }
+  if (manual) { resume(); return true; }
   place = null;
   showMenu();
   return true;
 };
 
 window.gm_authFailure = function () {
-  closePick();
+  closePick(true);
   place = null;
   showMenu();
   msg('金鑰無效,或沒有啟用 Maps JavaScript API<br><button onclick="location.href=\'vrweb://key\'">重新設定金鑰</button>');
@@ -131,17 +167,32 @@ window.gm_authFailure = function () {
 
 function showMenu() {
   landed = false;
+  manual = false;
   $('sv').style.display = 'none';
   $('map').style.display = 'block';
   renderList();
   $('menu').style.display = 'flex';
+  refreshCtl();
 }
 
 // 換場景時先變黑再變亮,避免畫面突然跳動造成頭暈
 function fadeTo(change) {
   var f = $('fade');
   f.style.opacity = 1;
-  setTimeout(function () { change(); f.style.opacity = 0; }, 650);
+  setTimeout(function () { change(); refreshCtl(); f.style.opacity = 0; }, 650);
+}
+
+// 2D 控制列:只在飛行中、不在 VR、不在選地圖時顯示
+function refreshCtl() {
+  var on = place && !vr && !menuShown() && !picking();
+  $('ctl').style.display = on ? 'flex' : 'none';
+  if (!on) return;
+  $('cResume').style.display = manual && !landed ? '' : 'none';
+  $('cPause').style.display = manual || landed ? 'none' : '';
+  $('cPause').textContent = paused ? '繼續' : '暫停';
+  $('cNext').style.display = landed ? 'none' : '';
+  $('cLand').textContent = landed ? '起飛' : '降落';
+  $('cPick').style.display = landed ? 'none' : '';
 }
 
 // ---------------- 目的地清單(內建 + 自己存的) ----------------
@@ -206,7 +257,7 @@ function loadMaps() {
 function go(p) {
   if (!key) { window.vrSetKey(''); return; }
   place = p;
-  leg = 0; progress = 0; paused = false; landed = false;
+  leg = 0; progress = 0; paused = false; landed = false; manual = false;
   msg('載入中…');
   loadMaps().then(function () {
     return google.maps.importLibrary('maps3d');
@@ -217,44 +268,82 @@ function go(p) {
       catch (e) { map = new lib.Map3DElement(opts); }
       $('map').appendChild(map);
     }
+    if (place !== p) return;   // 載入中又按了返回
     msg('');
+    $('sv').style.display = 'none';
+    $('map').style.display = 'block';
     $('menu').style.display = 'none';
     flash(p.name);
-    last = performance.now();
-    requestAnimationFrame(fly);
+    refreshCtl();
+    startLoop();
   }).catch(function (e) {
     place = null;
     msg('無法載入 3D 地圖:' + (e && e.message ? e.message : e));
   });
 }
 
+// 只跑一個動畫迴圈
+function startLoop() {
+  last = performance.now();
+  if (looping) return;
+  looping = true;
+  requestAnimationFrame(fly);
+}
+
+// 2D 時手指碰到 3D 地圖:停住自動飛行,讓手勢可以拖動、縮放、旋轉
+function takeControl() {
+  if (!place || vr || landed || manual || menuShown()) return;
+  manual = true;
+  refreshCtl();
+}
+$('map').addEventListener('pointerdown', takeControl, true);
+$('map').addEventListener('touchstart', takeControl, { capture: true, passive: true });
+$('map').addEventListener('wheel', takeControl, { capture: true, passive: true });
+
+function resume() {
+  if (!manual) return;
+  fadeTo(function () { manual = false; });
+}
+
 function ease(x) { return x * x * (3 - 2 * x); }   // 起步、停下都慢慢來
 
 function fly(now) {
-  if (!place || $('menu').style.display !== 'none') return;
+  if (!place || menuShown()) { looping = false; return; }
   requestAnimationFrame(fly);
   var dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (landed) {
-    // 地面:轉頭控制街景看的方向
-    if (pano) pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: Math.max(-80, Math.min(80, lookPitch)) });
+    // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
+    if (pano && vr) pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: Math.max(-80, Math.min(80, lookPitch)) });
     return;
   }
+  if (manual) return;   // 手勢控制中,不要蓋掉
   if (!paused && progress < 1) progress = Math.min(1, progress + dt * speed / GLIDE_SEC);
 
   var p = place;
   var bearing = (180 + leg * 90) * Math.PI / 180;               // 出發方向(從地標看出去):先從南邊接近
   var dist = p.r * (START_FAR - (START_FAR - 1) * ease(progress));
   var east = Math.sin(bearing) * dist, north = Math.cos(bearing) * dist;
-  var lat = p.lat + north / M_PER_DEG;
-  var lng = p.lng + east / (M_PER_DEG * Math.cos(p.lat * Math.PI / 180));
   var alt = p.top + (p.alt - p.top) * altScale;
   var toCenter = (Math.atan2(-east, -north) * 180 / Math.PI + 360) % 360;   // 看向地標的方位(滑行中不變)
   var down = Math.atan2(alt - p.top, dist) * 180 / Math.PI;                 // 看向地標要低頭幾度
-  map.center = { lat: lat, lng: lng, altitude: alt };
-  map.range = 1;
-  map.heading = (toCenter + lookYaw + 360) % 360;
-  map.tilt = Math.max(0, Math.min(90, 90 - down + lookPitch));             // 90 = 看水平
+  if (vr) {
+    // VR:相機放在飛行位置(range 1),轉頭就是原地轉動視線
+    map.center = {
+      lat: p.lat + north / M_PER_DEG,
+      lng: p.lng + east / (M_PER_DEG * Math.cos(p.lat * Math.PI / 180)),
+      altitude: alt
+    };
+    map.range = 1;
+    map.heading = (toCenter + lookYaw + 360) % 360;
+    map.tilt = Math.max(0, Math.min(90, 90 - down + lookPitch));           // 90 = 看水平
+  } else {
+    // 2D:同樣的視角,但改成「繞著地標看」,手勢拖動、縮放時以地標為中心
+    map.center = { lat: p.lat, lng: p.lng, altitude: p.top };
+    map.range = Math.sqrt(dist * dist + (alt - p.top) * (alt - p.top));
+    map.heading = toCenter;
+    map.tilt = 90 - down;
+  }
 }
 
 // ---------------- 降落(街景)/ 起飛 ----------------
@@ -265,35 +354,70 @@ function headingTo(fromLat, fromLng, toLat, toLng) {
   return (Math.atan2(dE, dN) * 180 / Math.PI + 360) % 360;
 }
 
+// 由近到遠找街景;不同版本的 API 有的用回呼、有的回傳 Promise,兩種都接
+function findPano(sv, at) {
+  var tries = [
+    { radius: 300, source: sv.StreetViewSource.OUTDOOR },
+    { radius: 2000, source: sv.StreetViewSource.OUTDOOR },
+    { radius: 5000, source: sv.StreetViewSource.DEFAULT }
+  ];
+  var service = new sv.StreetViewService();
+  function attempt(i) {
+    if (i >= tries.length) return Promise.resolve(null);
+    return new Promise(function (ok) {
+      var done = false;
+      function finish(data) { if (!done) { done = true; ok(data && data.location ? data : null); } }
+      try {
+        var r = service.getPanorama({ location: at, radius: tries[i].radius, source: tries[i].source,
+                                      preference: sv.StreetViewPreference ? sv.StreetViewPreference.NEAREST : undefined },
+          function (data, status) { finish(status === 'OK' ? data : null); });
+        if (r && r.then) r.then(function (res) { finish(res && res.data); }, function () { finish(null); });
+      } catch (e) { finish(null); }
+    }).then(function (data) { return data || attempt(i + 1); });
+  }
+  return attempt(0);
+}
+
 function land() {
   var p = place;
+  // 2D 手動移動過地圖:降落在畫面中間看著的地方;否則降落在地標附近
+  var at = { lat: p.lat, lng: p.lng };
+  if (manual && map && map.center) {
+    var c = map.center;
+    var lat = typeof c.lat === 'function' ? c.lat() : c.lat, lng = typeof c.lng === 'function' ? c.lng() : c.lng;
+    if (isFinite(lat) && isFinite(lng)) at = { lat: lat, lng: lng };
+  }
   flash('降落中…');
-  google.maps.importLibrary('streetView').then(function (sv) {
-    new sv.StreetViewService().getPanorama(
-      { location: { lat: p.lat, lng: p.lng }, radius: 500, source: sv.StreetViewSource.OUTDOOR },
-      function (data, status) {
-        if (status !== 'OK' || !data || !data.location) { flash('這裡附近沒有街景,無法降落'); return; }
-        var loc = data.location.latLng;
-        // 預設面向地標;如果就站在地標上,面向原本飛來的方向
-        var d = Math.abs(loc.lat() - p.lat) + Math.abs(loc.lng() - p.lng);
-        panoBase = d > 0.0002 ? headingTo(loc.lat(), loc.lng(), p.lat, p.lng) : (leg * 90) % 360;
-        fadeTo(function () {
-          if (!pano) {
-            pano = new sv.StreetViewPanorama($('sv'), {
-              disableDefaultUI: true, showRoadLabels: false, clickToGo: false, linksControl: false,
-              motionTracking: false, motionTrackingControl: false
-            });
-          }
-          pano.setPano(data.location.pano);
-          pano.setPov({ heading: panoBase, pitch: 0 });
-          pano.setVisible(true);
-          $('sv').style.display = 'block';
-          $('map').style.display = 'none';
-          landed = true;
-          flash(p.name + '(地面)');
-        });
+  loadMaps().then(function () {
+    return google.maps.importLibrary('streetView');
+  }).then(function (sv) {
+    return findPano(sv, at).then(function (data) {
+      if (place !== p) return;
+      if (!data) { flash('這裡附近沒有街景,無法降落'); return; }
+      var loc = data.location.latLng;
+      // 預設面向地標(或降落點);如果就站在上面,面向原本飛來的方向
+      var d = Math.abs(loc.lat() - at.lat) + Math.abs(loc.lng() - at.lng);
+      panoBase = d > 0.0002 ? headingTo(loc.lat(), loc.lng(), at.lat, at.lng) : (leg * 90) % 360;
+      fadeTo(function () {
+        // 先顯示容器再建立街景,不然街景會量到 0 大小、一片空白
+        $('sv').style.display = 'block';
+        $('map').style.display = 'none';
+        if (!pano) {
+          pano = new sv.StreetViewPanorama($('sv'), {
+            disableDefaultUI: true, showRoadLabels: false,
+            clickToGo: true, linksControl: true,   // 2D 時可以點地上的箭頭往前走
+            motionTracking: false, motionTrackingControl: false
+          });
+        }
+        pano.setPano(data.location.pano);
+        pano.setPov({ heading: panoBase, pitch: 0 });
+        pano.setVisible(true);
+        if (google.maps.event) google.maps.event.trigger(pano, 'resize');
+        landed = true;
+        flash(p.name + '(地面)');
       });
-  }).catch(function () { flash('無法載入街景'); });
+    });
+  }).catch(function (e) { flash('無法載入街景:' + (e && e.message ? e.message : e)); });
 }
 
 function takeOff() {
@@ -309,42 +433,54 @@ function takeOff() {
 
 function openPick() {
   if (!key) { window.vrSetKey(''); return; }
-  msg('載入地圖中…');
+  if (menuShown()) msg('載入地圖中…'); else flash('載入地圖中…');
   loadMaps().then(function () {
-    return Promise.all([google.maps.importLibrary('maps'), google.maps.importLibrary('marker')]);
-  }).then(function (libs) {
+    return google.maps.importLibrary('maps');
+  }).then(function (lib) {
     msg('');
     $('menu').style.display = 'none';
     $('pick').style.display = 'block';
     $('pickHint').style.display = 'block';
+    $('cross').style.display = 'block';
+    $('pickBar').style.display = 'flex';
+    refreshCtl();
+    var start = place ? { lat: place.lat, lng: place.lng } : null;
     if (!pickMap) {
-      pickMap = new libs[0].Map($('pick'), {
-        center: { lat: 23.7, lng: 121.0 }, zoom: 7, mapTypeId: 'hybrid',
+      pickMap = new lib.Map($('pick'), {
+        center: start || { lat: 23.7, lng: 121.0 }, zoom: start ? 14 : 7, mapTypeId: 'hybrid',
         streetViewControl: false, fullscreenControl: false, mapTypeControl: false, gestureHandling: 'greedy'
       });
-      pickMarker = new libs[1].Marker({ map: pickMap });
-      pickMap.addListener('click', function (e) {
-        picked = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-        pickMarker.setPosition(e.latLng);
-        $('pickBar').style.display = 'flex';
-      });
+      // 點一下:把那個地方移到中間的十字
+      pickMap.addListener('click', function (e) { if (e.latLng) pickMap.panTo(e.latLng); });
+    } else if (start) {
+      pickMap.setCenter(start);
+      pickMap.setZoom(14);
     }
   }).catch(function (e) {
-    msg('無法載入地圖:' + (e && e.message ? e.message : e));
+    var text = '無法載入地圖:' + (e && e.message ? e.message : e);
+    closePick(true);
+    if (menuShown()) msg(text); else flash(text);
   });
 }
 
-function closePick() {
+// quiet = 只收起選地圖畫面(出錯時用),不另外切畫面
+function closePick(quiet) {
   $('pick').style.display = 'none';
   $('pickHint').style.display = 'none';
+  $('cross').style.display = 'none';
   $('pickBar').style.display = 'none';
-  picked = null;
-  if (!place) showMenu();
+  if (!quiet && !place) showMenu();
+  refreshCtl();
+}
+
+function pickedLatLng() {
+  var c = pickMap && pickMap.getCenter();
+  return c ? { lat: c.lat(), lng: c.lng() } : null;
 }
 
 // 選到的地點:查地面高度(需要 Elevation API;沒有就當作接近海平面),算出飛行高度
-function pickedPlace(name) {
-  var p = { name: name || '地圖上的地點', lat: picked.lat, lng: picked.lng, r: 800, alt: 450, top: 50 };
+function pickedPlace(name, at) {
+  var p = { name: name || '地圖上的地點', lat: at.lat, lng: at.lng, r: 800, alt: 450, top: 50 };
   return google.maps.importLibrary('elevation').then(function (lib) {
     return new lib.ElevationService().getElevationForLocations({ locations: [{ lat: p.lat, lng: p.lng }] });
   }).then(function (res) {
@@ -356,20 +492,20 @@ function pickedPlace(name) {
 }
 
 $('pickBtn').onclick = openPick;
-$('pickCancel').onclick = closePick;
+$('pickCancel').onclick = function () { closePick(); };
 $('pickGo').onclick = function () {
-  if (!picked) return;
-  pickedPlace($('pname').value.trim()).then(function (p) {
-    $('pick').style.display = 'none';
-    $('pickHint').style.display = 'none';
-    $('pickBar').style.display = 'none';
+  var at = pickedLatLng();
+  if (!at) return;
+  pickedPlace($('pname').value.trim(), at).then(function (p) {
+    closePick(true);
     go(p);
   });
 };
 $('pickSave').onclick = function () {
-  if (!picked) return;
+  var at = pickedLatLng();
+  if (!at) return;
   var name = $('pname').value.trim() || ('我的地點 ' + (myPlaces().length + 1));
-  pickedPlace(name).then(function (p) {
+  pickedPlace(name, at).then(function (p) {
     var list = myPlaces();
     list.push(p);
     saveMyPlaces(list);
@@ -378,10 +514,15 @@ $('pickSave').onclick = function () {
   });
 };
 
-renderList();
+// 2D 控制列
+$('cResume').onclick = function () { resume(); };
+$('cPause').onclick = function () { window.vrFlight('pause'); };
+$('cNext').onclick = function () { window.vrFlight('next'); };
+$('cLand').onclick = function () { window.vrFlight('land'); };
+$('cPick').onclick = openPick;
+$('cMenu').onclick = function () { if (landed) landed = false; place = null; showMenu(); };
 
-// 2D 時點兩下返回(地面 → 起飛、空中 → 選單)
-document.addEventListener('dblclick', function () { if ($('pick').style.display !== 'block') window.vrBack(); });
+renderList();
 </script>
 </body>
 </html>
