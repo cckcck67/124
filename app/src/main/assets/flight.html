@@ -6,9 +6,12 @@
 <title>空中遊覽</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
-  #map, #sv, #pick { position: fixed; inset: 0; }
+  #map { position: fixed; inset: 0; }
+  /* Google 地圖 / 街景會在容器上直接加 position: relative,蓋掉 fixed 後高度變 0(只看到一片黑或後面的 3D 地圖),
+     所以用 !important 固定位置與大小 */
+  #sv, #pick { position: fixed !important; left: 0; top: 0; width: 100vw !important; height: 100vh !important; z-index: 1; }
   #sv, #pick { display: none; }
-  #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  #menu { position: fixed; z-index: 5; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
           gap: 2vh; background: #111; overflow-y: auto; padding: 2vh 0; box-sizing: border-box; }
   #menu h1 { margin: 0; font-size: 6vmin; }
   #list { display: grid; grid-template-columns: repeat(auto-fill, minmax(38vmin, 1fr)); gap: 2vmin; width: 90vw; }
@@ -24,14 +27,14 @@
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.6s; z-index: 10; }
   #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 30; display: none; padding: 2vmin; border-radius: 1.5vmin;
          background: rgba(80,20,20,0.92); color: #fff; font-size: 3.6vmin; text-align: center; pointer-events: none; }
-  #pickBar, #ctl { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
+  #pickBar, #ctl { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
                    align-items: center; padding: 2.5vmin; background: rgba(17,17,17,0.85); }
   #pickBar button, #ctl button { font-size: 3.8vmin; padding: 1.8vmin 3.5vmin; border: 0; border-radius: 1.5vmin; background: #2f5a88; color: #fff; }
   #ctl #cResume { background: #8a5a2f; }
   #pickBar input { font-size: 4vmin; padding: 1.5vmin; width: 40vmin; }
-  #pickHint { position: fixed; left: 0; right: 0; top: 0; padding: 2vmin; text-align: center; font-size: 4vmin;
+  #pickHint { position: fixed; z-index: 5; left: 0; right: 0; top: 0; padding: 2vmin; text-align: center; font-size: 4vmin;
               background: rgba(17,17,17,0.85); display: none; }
-  #cross { position: fixed; left: 50%; top: 50%; width: 12vmin; height: 12vmin; margin: -6vmin 0 0 -6vmin; display: none;
+  #cross { position: fixed; z-index: 5; left: 50%; top: 50%; width: 12vmin; height: 12vmin; margin: -6vmin 0 0 -6vmin; display: none;
            pointer-events: none; }
   #cross::before, #cross::after { content: ''; position: absolute; background: #f33; box-shadow: 0 0 0.6vmin #000; }
   #cross::before { left: 50%; top: 0; bottom: 0; width: 0.8vmin; margin-left: -0.4vmin; }
@@ -515,14 +518,17 @@ function pickedLatLng() {
 // 選到的地點:查地面高度(需要 Elevation API;沒有就當作接近海平面),算出飛行高度
 function pickedPlace(name, at) {
   var p = { name: name || '地圖上的地點', lat: at.lat, lng: at.lng, r: 800, alt: 450, top: 50 };
-  return google.maps.importLibrary('elevation').then(function (lib) {
+  // 查高度最多等 4 秒,查不到就用預設高度,不讓按鈕看起來沒反應
+  var timeout = new Promise(function (ok) { setTimeout(function () { ok(null); }, 4000); });
+  var lookup = google.maps.importLibrary('elevation').then(function (lib) {
     return new lib.ElevationService().getElevationForLocations({ locations: [{ lat: p.lat, lng: p.lng }] });
-  }).then(function (res) {
+  }).catch(function () { return null; });
+  return Promise.race([lookup, timeout]).then(function (res) {
     var g = res && res.results && res.results[0] ? res.results[0].elevation : 0;
     p.top = Math.round(Math.max(0, g) + 50);
     p.alt = Math.round(Math.max(0, g) + 450);
     return p;
-  }).catch(function () { return p; });
+  });
 }
 
 $('pickBtn').onclick = openPick;
@@ -530,6 +536,7 @@ $('pickCancel').onclick = function () { closePick(); };
 $('pickGo').onclick = function () {
   var at = pickedLatLng();
   if (!at) return;
+  flash('起飛中…');
   pickedPlace($('pname').value.trim(), at).then(function (p) {
     closePick(true);
     go(p);
