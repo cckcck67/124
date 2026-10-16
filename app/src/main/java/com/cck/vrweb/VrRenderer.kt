@@ -36,6 +36,7 @@ class VrRenderer(
         const val MODE_VR180 = 2     // 左右3D 半球影片(左半給左眼)
         const val MODE_TB360 = 3     // 上下3D 全景影片(上半給左眼,每半是 360 度攤平圖)
         const val MODE_YT = 4        // 環顧:網頁(YouTube VR 影片、空中遊覽)依頭的方向轉好單眼畫面,兩眼看同一張
+        const val MODE_CURVE = 5     // 2D曲面:2D 影片貼在圍著自己的弧形巨幕上
 
         /** 需要依頭部方向顯示的球面模式 */
         fun isSphere(m: Int) = m == MODE_VR180 || m == MODE_TB360
@@ -158,23 +159,36 @@ class VrRenderer(
             uniform float uH;
             uniform float uLift;
             uniform float uZo;
+            uniform float uDome;
+            uniform float uEdge;
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv * 2.0 - 1.0;
                 c *= 1.0 + uK * dot(c, c) * 0.25;
                 vec3 d = uHead * vec3(c.x * uTan.x, c.y * uTan.y, 1.0);
-                // 從自己的位置 (0, 0, uZo) 沿視線找到圓柱螢幕上的點
-                float a = d.x * d.x + d.z * d.z;
-                if (a < 1e-6) {
-                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                    return;
-                }
-                float b = 2.0 * uZo * d.z;
                 float cc = uZo * uZo - 1.0;
-                float t = (-b + sqrt(b * b - 4.0 * a * cc)) / (2.0 * a);
-                float lon = atan(t * d.x, uZo + t * d.z);
-                float y = t * d.y;
-                vec2 uv = vec2(lon / uArc + 0.5, (y - uLift) / uH + 0.5);
+                float b = 2.0 * uZo * d.z;
+                // 圓柱螢幕:從自己的位置 (0, 0, uZo) 沿視線找到螢幕上的點
+                vec2 pc = vec2(0.0, 0.0);
+                float a = d.x * d.x + d.z * d.z;
+                if (a > 1e-6) {
+                    float t = (-b + sqrt(b * b - 4.0 * a * cc)) / (2.0 * a);
+                    pc = vec2(atan(t * d.x, uZo + t * d.z), t * d.y);
+                } else {
+                    pc = vec2(0.0, d.y > 0.0 ? 1e3 : -1e3);
+                }
+                // 上下彎曲:改用球形螢幕(上下也往自己彎),依比例混合
+                if (uDome > 0.0) {
+                    float a2 = dot(d, d);
+                    float t2 = (-b + sqrt(b * b - 4.0 * a2 * cc)) / (2.0 * a2);
+                    vec3 p = vec3(t2 * d.x, t2 * d.y, uZo + t2 * d.z);
+                    vec2 ps = vec2(atan(p.x, p.z), asin(clamp(p.y, -1.0, 1.0)));
+                    pc = mix(pc, ps, uDome);
+                }
+                // 邊緣拉伸:中間維持比例,越往兩邊拉得越寬
+                float sx = clamp(pc.x / uArc * 2.0, -2.0, 2.0);
+                float fx = (1.0 + uEdge) * sx - uEdge * sx * sx * sx;
+                vec2 uv = vec2(abs(sx) > 1.0 ? -1.0 : fx * 0.5 + 0.5, (pc.y - uLift) / uH + 0.5);
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
@@ -227,10 +241,14 @@ class VrRenderer(
     @Volatile var ipd = 0f          // 左右間距偏移(佔單眼寬度比例,負 = 往中間靠)
     @Volatile var zoom = 1.4f       // 平面模式畫面放大倍率(超出單眼範圍的部分裁掉,填滿視野)
     @Volatile var distortion = 0.15f // 桶形校正強度
-    @Volatile var curve = 0f        // 曲面巨幕:螢幕張開的角度(度);0 = 一般平面畫面(跟著頭)
+    // 曲面巨幕(2D曲面模式;左右3D 設定弧度時也用)
+    @Volatile var curve = 0f        // 螢幕的弧度(度);左右3D 為 0 = 一般平面畫面(跟著頭)
+    @Volatile var curveSize = 1.4f  // 畫面大小:1.4 = 站在圓心,越大越靠近螢幕
+    @Volatile var dome = 0f         // 上下彎曲 0~1(0 = 圓柱,1 = 球形)
+    @Volatile var edge = 0f         // 邊緣拉伸 0~0.45
 
-    /** 目前是曲面巨幕(2D / 左右3D 且有設定弧度):畫面固定在空間中,需要頭部方向 */
-    fun isCurved() = curve > 0.5f && (mode == MODE_2D || mode == MODE_SBS)
+    /** 目前是曲面巨幕:畫面固定在空間中,需要頭部方向 */
+    fun isCurved() = curve > 0.5f && (mode == MODE_CURVE || mode == MODE_SBS)
     @Volatile var lift = 0.05f      // 畫面往上移(佔高度比例),VR 盒子下緣較看不到
     @Volatile var fovDeg = 90f      // VR180 單眼水平視野(配合 VR 盒子鏡片)
     // 兩眼畫面中間的黑色空隙(佔整個寬度比例),避免看到另一眼畫面的雙影(每個模式各自設定)
@@ -300,6 +318,8 @@ class VrRenderer(
         val uH = GLES20.glGetUniformLocation(id, "uH")
         val uLift = GLES20.glGetUniformLocation(id, "uLift")
         val uZo = GLES20.glGetUniformLocation(id, "uZo")
+        val uDome = GLES20.glGetUniformLocation(id, "uDome")
+        val uEdge = GLES20.glGetUniformLocation(id, "uEdge")
     }
 
     // [0] = 直接用 OES 材質,[1] = 用 Mipmap 的 2D 材質
@@ -655,11 +675,16 @@ class VrRenderer(
         val arc = Math.toRadians(curve.toDouble()).toFloat()
         val videoAspect = (sx * srcW) / (sy * srcH).coerceAtLeast(1e-6f)
         val h = arc / videoAspect.coerceAtLeast(0.1f)
-        GLES20.glUniform1f(p.uArc, arc)
+        // 邊緣拉伸:螢幕往兩邊加寬(最多 330 度),中間的比例不變
+        val e = edge.coerceIn(0f, 0.45f)
+        val arcEff = (arc * (1f + e)).coerceAtMost(Math.toRadians(330.0).toFloat())
+        GLES20.glUniform1f(p.uArc, arcEff)
+        GLES20.glUniform1f(p.uEdge, e)
+        GLES20.glUniform1f(p.uDome, dome.coerceIn(0f, 1f))
         GLES20.glUniform1f(p.uH, h)
         GLES20.glUniform1f(p.uLift, lift * h)
         // 畫面大小 = 和螢幕的距離:1.4 倍站在圓心,越大越靠近(螢幕越大、上下黑邊越少、要轉頭才看得到兩端)
-        val dist = (1.4f / zoom).coerceIn(0.3f, 1.8f)
+        val dist = (1.4f / curveSize).coerceIn(0.3f, 1.8f)
         GLES20.glUniform1f(p.uZo, 1f - dist)
         bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
