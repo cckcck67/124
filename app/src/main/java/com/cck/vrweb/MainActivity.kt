@@ -1601,6 +1601,12 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FLY_RESTART -> p.run("window.vrFlight&&vrFlight('restart')")
             VrMenu.BTN_FLY_NEXT -> p.run("window.vrFlight&&vrFlight('next')")
             VrMenu.BTN_FLY_LAND -> p.run("window.vrFlight&&vrFlight('land')")
+            VrMenu.BTN_WALK_FWD -> { p.run("window.vrFlight&&vrFlight('fwd')"); pollStatus() }
+            VrMenu.BTN_WALK_BACK -> { p.run("window.vrFlight&&vrFlight('back')"); pollStatus() }
+            VrMenu.BTN_WALK_AUTO -> { p.run("window.vrFlight&&vrFlight('auto')"); menu.walking = !menu.walking }
+            VrMenu.BTN_WALK_SLOWER -> { p.run("window.vrFlight&&vrFlight('slower')"); pollStatus() }
+            VrMenu.BTN_WALK_FASTER -> { p.run("window.vrFlight&&vrFlight('faster')"); pollStatus() }
+            VrMenu.BTN_WALK_HOME -> p.run("window.vrFlight&&vrFlight('home')")
             VrMenu.BTN_FLY_SLOWER -> bumpFlight("speed", -1)
             VrMenu.BTN_FLY_FASTER -> bumpFlight("speed", 1)
             VrMenu.BTN_FLY_LOWER -> bumpFlight("alt", -1)
@@ -1726,7 +1732,14 @@ class MainActivity : Activity(), SensorEventListener {
                 menu.hasVideo = false
                 menu.flyPaused = o?.optBoolean("paused") == true
                 menu.flyLanded = o?.optBoolean("landed") == true
-                menu.infoText = if (o == null) "空中遊覽:請先在 2D 畫面選擇目的地" else
+                menu.walking = o?.optBoolean("walking") == true
+                // 降落到街景:面板換成散步用的按鈕;起飛後換回飛行按鈕
+                val want = if (menu.flyLanded) VrMenu.WALK_BUTTONS else VrMenu.FLIGHT_BUTTONS
+                if (!menu.buttons.contentEquals(want)) { menu.buttons = want; menu.hover = VrMenu.NONE }
+                menu.infoText = if (o == null) "空中遊覽:請先在 2D 畫面選擇目的地" else if (menu.flyLanded)
+                    "街景  " + o.optString("road").ifEmpty { o.optString("name") } +
+                        (if (menu.walking) "  自動散步中" else "") + "  每 ${o.optInt("walkSec", 4)} 秒一步"
+                else
                     "空中遊覽  " + o.optString("name") + when {
                         menu.flyLanded -> "  已降落(街景)"
                         o.optBoolean("arrived") -> "  已抵達"

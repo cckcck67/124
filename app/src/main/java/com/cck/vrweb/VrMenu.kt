@@ -59,8 +59,15 @@ class VrMenu {
         const val BTN_FLY_FASTER = 12    //           飛快一點
         const val BTN_FLY_LOWER = 13     //           飛低一點
         const val BTN_FLY_HIGHER = 14    //           飛高一點
+        const val BTN_WALK_FWD = 15      // 街景散步:前進
+        const val BTN_WALK_BACK = 16     //           後退
+        const val BTN_WALK_AUTO = 17     //           自動散步 / 停止
+        const val BTN_WALK_SLOWER = 18   //           走慢一點
+        const val BTN_WALK_FASTER = 19   //           走快一點
+        const val BTN_WALK_HOME = 20     //           回降落點
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
-            "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛高－", "飛高＋")
+            "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛高－", "飛高＋",
+            "前進", "後退", "自動散步", "走快－", "走快＋", "回降落點")
 
         /** 影片(網頁、我的影片)用的按鈕 */
         val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
@@ -68,6 +75,10 @@ class VrMenu {
         // 給長輩、小孩用:速度、高度直接放在第一層
         val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_NEXT, BTN_FLY_LAND,
             BTN_FLY_SLOWER, BTN_FLY_FASTER, BTN_FLY_LOWER, BTN_FLY_HIGHER, BTN_RECENTER, BTN_SETTINGS)
+
+        /** 降落到街景後:散步用的按鈕 */
+        val WALK_BUTTONS = intArrayOf(BTN_POSTURE, BTN_WALK_FWD, BTN_WALK_BACK, BTN_WALK_AUTO,
+            BTN_WALK_SLOWER, BTN_WALK_FASTER, BTN_WALK_HOME, BTN_FLY_LAND, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧", "2D曲面")
@@ -111,6 +122,7 @@ class VrMenu {
     var infoText: String? = null    // 資訊列文字;null = 顯示影片時間
     var flyPaused = false
     var flyLanded = false
+    var walking = false        // 街景自動散步中
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
@@ -288,6 +300,7 @@ class VrMenu {
                 BTN_MODE -> MODE_NAMES[mode]
                 BTN_FLY_PAUSE -> if (flyPaused) "繼續" else "暫停"
                 BTN_FLY_LAND -> if (flyLanded) "起飛" else "降落"
+                BTN_WALK_AUTO -> if (walking) "停止" else "自動散步"
                 else -> LABELS[id]
             }
             centerText.color = if (popup != NONE && popup != id) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
