@@ -139,8 +139,9 @@ class VrRenderer(
             }
         """
 
-        // 曲面巨幕:影片貼在圍著自己的圓弧螢幕上(固定在空間中,轉頭看左右)
-        // uArc = 螢幕左右張開的角度(弧度)、uH = 螢幕高度(以半徑為 1 計)、uLift = 螢幕往上移
+        // 曲面巨幕:影片貼在圓弧螢幕上(半徑 1 的圓柱,固定在空間中,轉頭看左右)
+        // uArc = 螢幕的弧度(從圓心看張開的角度)、uH = 螢幕高度、uLift = 螢幕往上移
+        // uZo = 自己站的位置(0 = 圓心,越大越靠近螢幕、螢幕看起來越大)
         private const val FS_CURVE = """
             #ifdef GL_FRAGMENT_PRECISION_HIGH
             precision highp float;
@@ -156,13 +157,23 @@ class VrRenderer(
             uniform float uArc;
             uniform float uH;
             uniform float uLift;
+            uniform float uZo;
             varying vec2 vUv;
             void main() {
                 vec2 c = vUv * 2.0 - 1.0;
                 c *= 1.0 + uK * dot(c, c) * 0.25;
                 vec3 d = uHead * vec3(c.x * uTan.x, c.y * uTan.y, 1.0);
-                float lon = atan(d.x, d.z);
-                float y = d.y / max(length(d.xz), 1e-4);
+                // 從自己的位置 (0, 0, uZo) 沿視線找到圓柱螢幕上的點
+                float a = d.x * d.x + d.z * d.z;
+                if (a < 1e-6) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
+                float b = 2.0 * uZo * d.z;
+                float cc = uZo * uZo - 1.0;
+                float t = (-b + sqrt(b * b - 4.0 * a * cc)) / (2.0 * a);
+                float lon = atan(t * d.x, uZo + t * d.z);
+                float y = t * d.y;
                 vec2 uv = vec2(lon / uArc + 0.5, (y - uLift) / uH + 0.5);
                 if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -288,6 +299,7 @@ class VrRenderer(
         val uArc = GLES20.glGetUniformLocation(id, "uArc")
         val uH = GLES20.glGetUniformLocation(id, "uH")
         val uLift = GLES20.glGetUniformLocation(id, "uLift")
+        val uZo = GLES20.glGetUniformLocation(id, "uZo")
     }
 
     // [0] = 直接用 OES 材質,[1] = 用 Mipmap 的 2D 材質
@@ -646,6 +658,9 @@ class VrRenderer(
         GLES20.glUniform1f(p.uArc, arc)
         GLES20.glUniform1f(p.uH, h)
         GLES20.glUniform1f(p.uLift, lift * h)
+        // 畫面大小 = 和螢幕的距離:1.4 倍站在圓心,越大越靠近(螢幕越大、上下黑邊越少、要轉頭才看得到兩端)
+        val dist = (1.4f / zoom).coerceIn(0.3f, 1.8f)
+        GLES20.glUniform1f(p.uZo, 1f - dist)
         bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
