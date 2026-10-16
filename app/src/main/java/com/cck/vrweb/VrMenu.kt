@@ -65,7 +65,9 @@ class VrMenu {
             BTN_FLY_LAND, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧")
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧", "2D曲面")
+        // 「模式」選單裡的排列順序(2D曲面排在 2D 後面)
+        val MODE_ORDER = intArrayOf(0, 5, 1, 2, 3, 4)
 
         // 設定頁:兩欄(項目多時三欄),每格 = 名稱與數值、−、+
         private const val SET_TOP = 80f
@@ -121,8 +123,8 @@ class VrMenu {
 
     private fun canSeek() = hasVideo && duration > 0
 
-    fun optionNames(): Array<String> = MODE_NAMES
-    private fun selectedOption() = mode
+    fun optionNames(): Array<String> = Array(MODE_ORDER.size) { MODE_NAMES[MODE_ORDER[it]] }
+    private fun selectedOption() = MODE_ORDER.indexOf(mode)
 
     // ---- 設定頁格子位置(坐姿版面座標) ----
     private fun cellCount() = settingRows.size   // 不設「返回」:抬頭收起面板就離開設定頁
