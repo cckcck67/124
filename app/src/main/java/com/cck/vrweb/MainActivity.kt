@@ -645,10 +645,8 @@ class MainActivity : Activity(), SensorEventListener {
         Setting("zoom", "畫面大小", 0.05f, 1f, 2.5f, "%.2f倍", { prefs.getFloat("zoom", 1.4f) }) { renderer.zoom = it },
         Setting("lift", "畫面高低", 0.01f, -0.3f, 0.3f, "%+.2f", { prefs.getFloat("lift", 0.05f) }) { renderer.lift = it },
         Setting("ipd", "左右間距", 0.005f, -0.3f, 0.1f, "%+.3f", { prefs.getFloat("ipd2", defaultIpd()) }) { renderer.ipd = it },
-        Setting("tilt", "翻轉角度", 0.5f, -10f, 10f, "%+.1f度",
-            { Math.toDegrees(prefs.getFloat("tilt", 0f).toDouble()).toFloat() }) {
-            renderer.tilt = Math.toRadians(it.toDouble()).toFloat()
-        },
+        // 曲面巨幕:0 = 一般平面(跟著頭);大於 0 = 圍著自己的弧形螢幕,固定在空間中,轉頭看左右
+        Setting("curve", "曲面弧度", 10f, 0f, 180f, "%.0f度", { 0f }) { renderer.curve = it; redraw() },
         Setting("gap", "中間空隙", 0.005f, 0f, 0.2f, "%.3f", { prefs.getFloat("gapFlat", 0.1f) }) { renderer.gap = it },
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
     ) }
@@ -674,7 +672,7 @@ class MainActivity : Activity(), SensorEventListener {
             Setting("gain", "轉頭比例", 0.05f, 0.2f, 1.5f, "%.2f", { 0.7f }) { flyGain = it; lastYtYaw = 999f },
             Setting("speed", "飛行速度", 0.25f, 0.25f, 3f, "%.2f倍", { 1f }) { flySpeed = it; sendFlightConfig() },
             Setting("alt", "飛行高度", 0.1f, 0.5f, 2.5f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
-        ) + flatSettings.filter { it.key != "tilt" }
+        ) + flatSettings.filter { it.key != "curve" }
     }
 
     private fun sendFlightConfig() {
@@ -1383,7 +1381,7 @@ class MainActivity : Activity(), SensorEventListener {
             redraw()
         }
 
-        if (VrRenderer.isSphere(renderer.mode)) {
+        if (VrRenderer.isSphere(renderer.mode) || renderer.isCurved()) {
             // 相機座標(右、上、前) → 參考座標(右、上、前),直行優先;兩份陣列輪流寫,不產生新物件
             headIdx = 1 - headIdx
             val h = headBuf[headIdx]
