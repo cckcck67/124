@@ -25,7 +25,7 @@
   #title { position: fixed; left: 0; right: 0; top: 3vh; text-align: center; font-size: 5vmin; z-index: 20;
            text-shadow: 0 0 1vh #000, 0 0 2vh #000; pointer-events: none; transition: opacity 2s; }
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.6s; z-index: 10; }
-  #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 30; display: none; padding: 2vmin; border-radius: 1.5vmin;
+  #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 2147483647; display: none; padding: 2vmin; border-radius: 1.5vmin;
          background: rgba(80,20,20,0.92); color: #fff; font-size: 3.6vmin; text-align: center; pointer-events: none; }
   #pickBar, #ctl { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
                    align-items: center; padding: 2.5vmin; background: rgba(17,17,17,0.85); }
@@ -50,6 +50,7 @@
 <div id="pickBar">
   <input id="pname" placeholder="地點名稱(存起來用)">
   <button id="pickGo">從這裡起飛</button>
+  <button id="pickWalk">散步(街景)</button>
   <button id="pickSave">存成地點</button>
   <button id="pickCancel">取消</button>
 </div>
@@ -126,6 +127,30 @@ window.addEventListener('unhandledrejection', function (e) {
   var r = e && e.reason;
   showErr('發生錯誤:' + (r && r.message ? r.message : r));
 });
+// Google 地圖的錯誤代碼(印在 console.error)翻成白話,顯示出來
+var MAP_ERRORS = {
+  ApiNotActivatedMapError: '這把金鑰的 Google Cloud 專案沒有啟用「Maps JavaScript API」',
+  BillingNotEnabledMapError: '這把金鑰的 Google Cloud 專案沒有綁定帳單(付款方式);街景、2D 地圖需要綁定(有每月免費額度)',
+  ApiTargetBlockedMapError: '金鑰的「API 限制」沒有勾選「Maps JavaScript API」',
+  RefererNotAllowedMapError: '金鑰的「網站限制」不允許 https://appassets.androidplatform.net/*',
+  InvalidKeyMapError: '金鑰無效,請重新複製貼上',
+  ExpiredKeyMapError: '金鑰已過期,請重新產生',
+  MissingKeyMapError: '沒有金鑰',
+  OverQuotaMapError: '超過使用額度',
+  DeletedApiProjectMapError: '金鑰的專案已被刪除'
+};
+(function () {
+  var orig = console.error;
+  console.error = function () {
+    try {
+      var text = Array.prototype.join.call(arguments, ' ');
+      var m = text.match(/([A-Za-z]+MapError)/);
+      if (m) showErr('Google 地圖錯誤:' + (MAP_ERRORS[m[1]] || m[1]) + '(' + m[1] + ')');
+    } catch (e) {}
+    return orig.apply(console, arguments);
+  };
+})();
+
 // Google 拒絕這把金鑰(沒開對應的服務、或限制了網址)
 window.gm_authFailure = function () {
   showErr('Google 拒絕了金鑰:請在 Google Cloud 確認已啟用 Maps JavaScript API,且金鑰的限制允許這個 App');
@@ -279,8 +304,10 @@ function loadMaps() {
   return loading;
 }
 
-function go(p) {
+var landAfterLoad = false;   // 「散步」:3D 地圖準備好就直接降落到街景
+function go(p, walk) {
   if (!key) { window.vrSetKey(''); return; }
+  landAfterLoad = !!walk;
   place = p;
   leg = 0; progress = 0; paused = false; landed = false; manual = false;
   msg('載入中…');
@@ -301,6 +328,7 @@ function go(p) {
     flash(p.name);
     refreshCtl();
     startLoop();
+    if (landAfterLoad) { landAfterLoad = false; land(); }
   }).catch(function (e) {
     place = null;
     msg('無法載入 3D 地圖:' + (e && e.message ? e.message : e));
@@ -540,6 +568,15 @@ $('pickGo').onclick = function () {
   pickedPlace($('pname').value.trim(), at).then(function (p) {
     closePick(true);
     go(p);
+  });
+};
+$('pickWalk').onclick = function () {
+  var at = pickedLatLng();
+  if (!at) return;
+  flash('前往街景…');
+  pickedPlace($('pname').value.trim(), at).then(function (p) {
+    closePick(true);
+    go(p, true);
   });
 };
 $('pickSave').onclick = function () {

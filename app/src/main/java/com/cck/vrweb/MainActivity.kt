@@ -688,6 +688,15 @@ class MainActivity : Activity(), SensorEventListener {
         ) + flatSettings
     }
 
+    /** 面板第一層的「飛快 / 飛高 ±」:改空中遊覽的速度 / 高度設定 */
+    private fun bumpFlight(key: String, dir: Int) {
+        val st = flightSettings.firstOrNull { it.key == key } ?: return
+        val v = (settingValue(st) + dir * st.step).coerceIn(st.min, st.max)
+        prefs.edit().putFloat(prefKey(st), v).apply()
+        st.apply(v)
+        pollStatus()
+    }
+
     private fun sendFlightConfig() {
         if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode)")
     }
@@ -1561,6 +1570,10 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FLY_RESTART -> p.run("window.vrFlight&&vrFlight('restart')")
             VrMenu.BTN_FLY_NEXT -> p.run("window.vrFlight&&vrFlight('next')")
             VrMenu.BTN_FLY_LAND -> p.run("window.vrFlight&&vrFlight('land')")
+            VrMenu.BTN_FLY_SLOWER -> bumpFlight("speed", -1)
+            VrMenu.BTN_FLY_FASTER -> bumpFlight("speed", 1)
+            VrMenu.BTN_FLY_LOWER -> bumpFlight("alt", -1)
+            VrMenu.BTN_FLY_HIGHER -> bumpFlight("alt", 1)
             VrMenu.BTN_VOL_DOWN -> changeVolume(AudioManager.ADJUST_LOWER)
             VrMenu.BTN_VOL_UP -> changeVolume(AudioManager.ADJUST_RAISE)
             // 置中:倒數 3 秒,期間轉頭看想要的正前方,再以當時的方向為準
@@ -1687,7 +1700,8 @@ class MainActivity : Activity(), SensorEventListener {
                         menu.flyLanded -> "  已降落(街景)"
                         o.optBoolean("arrived") -> "  已抵達"
                         else -> ""
-                    } + (if (menu.flyPaused && !menu.flyLanded) "  已暫停" else "")
+                    } + (if (menu.flyPaused && !menu.flyLanded) "  已暫停" else "") +
+                    "  速度 %.2f倍  高度 %.1f倍".format(flySpeed, flyAlt)
                 redrawPanel(force = true)
             }
             return

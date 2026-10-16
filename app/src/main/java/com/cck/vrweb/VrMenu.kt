@@ -55,14 +55,19 @@ class VrMenu {
         const val BTN_FLY_RESTART = 8    //           重新飛這一段
         const val BTN_FLY_NEXT = 9       //           換一個方向接近
         const val BTN_FLY_LAND = 10      //           降落到街景 / 起飛
+        const val BTN_FLY_SLOWER = 11    //           飛慢一點
+        const val BTN_FLY_FASTER = 12    //           飛快一點
+        const val BTN_FLY_LOWER = 13     //           飛低一點
+        const val BTN_FLY_HIGHER = 14    //           飛高一點
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
-            "暫停", "重飛", "換角度", "降落")
+            "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛高－", "飛高＋")
 
         /** 影片(網頁、我的影片)用的按鈕 */
         val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
         /** 空中遊覽用的按鈕(設定也是空中遊覽自己的,和影片分開) */
-        val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_RESTART, BTN_FLY_NEXT,
-            BTN_FLY_LAND, BTN_RECENTER, BTN_SETTINGS)
+        // 給長輩、小孩用:速度、高度直接放在第一層
+        val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_NEXT, BTN_FLY_LAND,
+            BTN_FLY_SLOWER, BTN_FLY_FASTER, BTN_FLY_LOWER, BTN_FLY_HIGHER, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
         val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧", "2D曲面")
