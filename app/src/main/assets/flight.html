@@ -59,6 +59,9 @@
   <button id="cResume">回到航線</button>
   <button id="cPause">暫停</button>
   <button id="cNext">換角度</button>
+  <button id="cFwd">前進</button>
+  <button id="cAuto">自動散步</button>
+  <button id="cHome">回降落點</button>
   <button id="cLand">降落</button>
   <button id="cPick">地圖</button>
   <button id="cMenu">目的地</button>
@@ -96,6 +99,8 @@ var vr = false;                   // App 是否在 VR 模式(VR 裡轉頭看,2D 
 var manual = false;               // 2D 時用手勢移動了地圖:自動飛行先停住,不再蓋掉手勢
 var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
 var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設面向
+var landPano = '';                // 降落時的街景點(回降落點用)
+var walkAuto = false, walkSec = 4, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
 var pickMap = null;
 
 function $(id) { return document.getElementById(id); }
@@ -181,7 +186,16 @@ window.vrFlightConfig = function (s, a, v) {
 window.vrFlight = function (cmd) {
   if (!place) return false;
   if (cmd === 'land') { landed ? takeOff() : land(); return true; }
-  if (landed) return true;   // 在地面上時,飛行指令先不動作
+  if (landed) {   // 在地面上:散步指令
+    if (cmd === 'fwd') { walkAuto = false; step(1); }
+    else if (cmd === 'back') { walkAuto = false; step(-1); }
+    else if (cmd === 'auto') { walkAuto = !walkAuto; lastStep = performance.now(); flash(walkAuto ? '自動散步:每 ' + walkSec + ' 秒走一步' : '停下來'); }
+    else if (cmd === 'faster') { walkSec = Math.max(2, walkSec - 1); flash('每 ' + walkSec + ' 秒走一步'); }
+    else if (cmd === 'slower') { walkSec = Math.min(10, walkSec + 1); flash('每 ' + walkSec + ' 秒走一步'); }
+    else if (cmd === 'home') { walkAuto = false; if (pano && landPano) fadeTo(function () { pano.setPano(landPano); }); }
+    refreshCtl();
+    return true;
+  }
   if (cmd === 'pause') { if (manual) resume(); else paused = !paused; }
   else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; });
   else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; });
@@ -191,7 +205,8 @@ window.vrFlight = function (cmd) {
 };
 // 面板顯示用的狀態
 window.vrFlightState = function () {
-  return place ? { name: place.name, paused: paused || manual, arrived: progress >= 1, landed: landed, manual: manual } : null;
+  return place ? { name: place.name, paused: paused || manual, arrived: progress >= 1, landed: landed, manual: manual,
+                   road: landed ? roadName() : '', walking: landed && walkAuto, walkSec: walkSec } : null;
 };
 // 返回鍵:選地圖 → 回去;地面 → 起飛;手動移動中 → 回到航線;空中 → 目的地選單;已在選單回傳 false(App 回首頁)
 window.vrBack = function () {
@@ -243,6 +258,10 @@ function refreshCtl() {
   $('cNext').style.display = landed ? 'none' : '';
   $('cLand').textContent = landed ? '起飛' : '降落';
   $('cPick').style.display = landed ? 'none' : '';
+  $('cFwd').style.display = landed ? '' : 'none';
+  $('cAuto').style.display = landed ? '' : 'none';
+  $('cAuto').textContent = walkAuto ? '停止' : '自動散步';
+  $('cHome').style.display = landed ? '' : 'none';
 }
 
 // ---------------- 目的地清單(內建 + 自己存的) ----------------
@@ -368,6 +387,11 @@ function fly(now) {
   if (landed) {
     // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
     if (pano && vr) pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: Math.max(-80, Math.min(80, lookPitch)) });
+    // 自動散步:時間到就往臉朝的方向走一步
+    if (walkAuto && now - lastStep > walkSec * 1000) {
+      lastStep = now;
+      if (!step(1)) { walkAuto = false; refreshCtl(); }
+    }
     return;
   }
   if (manual) return;   // 手勢控制中,不要蓋掉
@@ -463,6 +487,8 @@ function land() {
           });
         }
         pano.setPano(data.location.pano);
+        landPano = data.location.pano;
+        walkAuto = false;
         pano.setPov({ heading: panoBase, pitch: 0 });
         pano.setVisible(true);
         // 街景載不出來時顯示原因(不然只會一片黑)
@@ -480,7 +506,39 @@ function land() {
   }).catch(function (e) { showErr('無法載入街景:' + (e && e.message ? e.message : e)); });
 }
 
+// ---------------- 散步(街景中前進 / 後退) ----------------
+
+// 目前臉朝的方向(度):VR 用轉頭角度,2D 用街景目前的方向
+function viewHeading() {
+  if (vr) return (panoBase + lookYaw + 360) % 360;
+  var pov = pano && pano.getPov ? pano.getPov() : null;
+  return pov ? pov.heading : panoBase;
+}
+
+function angleDiff(a, b) { var d = Math.abs(((a - b) % 360 + 360) % 360); return d > 180 ? 360 - d : d; }
+
+// dir = 1 往前、-1 往後:沿著街景的路,選最接近那個方向的下一個點;沒有路回傳 false
+function step(dir) {
+  if (!pano || !pano.getLinks) return false;
+  var want = (viewHeading() + (dir < 0 ? 180 : 0)) % 360;
+  var best = null, bestD = 999;
+  (pano.getLinks() || []).forEach(function (l) {
+    var d = angleDiff(l.heading, want);
+    if (d < bestD) { bestD = d; best = l; }
+  });
+  if (!best || bestD > 75) { flash(dir < 0 ? '後面沒有路了' : '前面沒有路了,轉個方向試試'); return false; }
+  pano.setPano(best.pano);
+  return true;
+}
+
+// 目前所在的路名 / 地名
+function roadName() {
+  var loc = pano && pano.getLocation ? pano.getLocation() : null;
+  return loc ? (loc.description || loc.shortDescription || '') : '';
+}
+
 function takeOff() {
+  walkAuto = false;
   fadeTo(function () {
     landed = false;
     $('sv').style.display = 'none';
@@ -597,6 +655,9 @@ $('cResume').onclick = function () { resume(); };
 $('cPause').onclick = function () { window.vrFlight('pause'); };
 $('cNext').onclick = function () { window.vrFlight('next'); };
 $('cLand').onclick = function () { window.vrFlight('land'); };
+$('cFwd').onclick = function () { window.vrFlight('fwd'); };
+$('cAuto').onclick = function () { window.vrFlight('auto'); };
+$('cHome').onclick = function () { window.vrFlight('home'); };
 $('cPick').onclick = openPick;
 $('cMenu').onclick = function () { if (landed) landed = false; place = null; showMenu(); };
 
