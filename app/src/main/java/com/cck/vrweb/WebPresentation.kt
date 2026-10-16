@@ -78,6 +78,9 @@ class WebPresentation(
     var onUrlChanged: (String?) -> Unit = {}
     /** App 內建頁面的指令(網址 vrweb://指令),例如 vrweb://key = 設定金鑰 */
     var onAppCommand: (String) -> Unit = {}
+    /** Google 地圖回報的錯誤代碼(例如 BillingNotEnabledMapError),每種只通知一次 */
+    var onMapError: (String) -> Unit = {}
+    private val mapErrorsSeen = HashSet<String>()
 
     // 內建頁面用 https://appassets.androidplatform.net/assets/… 提供(金鑰可限定只給這個網址用)
     private val assetLoader by lazy {
@@ -207,6 +210,12 @@ class WebPresentation(
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
+            // Google 地圖把錯誤原因印在 console:抓出錯誤代碼交給 App 顯示
+            override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                val code = Regex("([A-Za-z]+MapError)").find(m.message() ?: "")?.groupValues?.get(1)
+                if (code != null && mapErrorsSeen.add(code)) onMapError(code)
+                return false
+            }
             // 網頁播放器按「全螢幕」時,Chromium 會交出一個播放器 View
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 removeCustomView()

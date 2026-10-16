@@ -832,6 +832,35 @@ class MainActivity : Activity(), SensorEventListener {
         dlg.show()
     }
 
+    /** Google 地圖拒絕這把金鑰的原因,用白話說明怎麼處理(VR 中不跳出) */
+    private fun showMapError(code: String) {
+        val why = when (code) {
+            "BillingNotEnabledMapError" -> "這把金鑰所屬的 Google Cloud 專案沒有綁定帳單(付款方式)。\n" +
+                "街景和 2D 地圖需要綁定帳單才能正常顯示(每月有免費額度)。\n\n" +
+                "處理:Google Cloud 控制台 → 帳單 → 把這個專案連結到帳單帳戶。"
+            "ApiNotActivatedMapError" -> "這把金鑰的專案沒有啟用「Maps JavaScript API」。\n\n" +
+                "處理:Google Cloud 控制台 → API 和服務 → 程式庫 → 搜尋 Maps JavaScript API → 啟用。"
+            "ApiTargetBlockedMapError" -> "金鑰的「API 限制」沒有包含這個功能需要的 API。\n\n" +
+                "處理:Google Cloud 控制台 → API 和服務 → 憑證 → 這把金鑰 → API 限制,勾選 Maps JavaScript API(或先改成不限制)。"
+            "RefererNotAllowedMapError" -> "金鑰的「網站限制」不允許這個 App 的網址。\n\n" +
+                "處理:金鑰的應用程式限制加入 https://appassets.androidplatform.net/*(或先改成無限制)。"
+            "InvalidKeyMapError" -> "金鑰無效,請到設定重新貼上金鑰。"
+            "ExpiredKeyMapError" -> "金鑰已過期,請重新產生後貼上。"
+            "OverQuotaMapError" -> "超過 Google 地圖的使用額度。"
+            else -> "Google 地圖回報錯誤。"
+        }
+        if (vrMode) { toast("Google 地圖錯誤:$code(退出 VR 後看說明)"); pendingMapError = code; return }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Google 地圖錯誤")
+            .setMessage("$why\n\n(錯誤代碼:$code)")
+            .setPositiveButton("知道了", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
+
+    private var pendingMapError: String? = null
+
     // ---------------- 書籤 ----------------
 
     private class Bookmark(var title: String, var url: String)
@@ -967,6 +996,7 @@ class MainActivity : Activity(), SensorEventListener {
         presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
             it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
+            it.onMapError = { code -> handler.post { showMapError(code) } }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
             it.onFullscreen = { on -> onWebFullscreen(on) }
             it.show()
@@ -1075,6 +1105,7 @@ class MainActivity : Activity(), SensorEventListener {
                 screen == SCREEN_WEB && p.isFullscreen -> { p.exitFullscreen(); p.pauseAll() }
             }
         }
+        if (!on) pendingMapError?.let { code -> pendingMapError = null; handler.post { showMapError(code) } }
         if (on) {
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
