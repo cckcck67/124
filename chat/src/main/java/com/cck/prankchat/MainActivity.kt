@@ -16,7 +16,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * 整人聊天:畫面全部在 assets/index.html,這裡只負責
+ * 整人聊天(偽裝成 LINE 好友捷徑):打開直接進聊天室,離開時打開真的 LINE。
+ * 畫面全部在 assets/index.html,這裡只負責
  * 存檔(聊天內容存在 App 自己的資料夾)、選圖片 / 選檔案、狀態列顏色、返回鍵、接收 LINE 分享過來的聊天記錄。
  */
 class MainActivity : Activity() {
@@ -24,6 +25,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_FILE = 1
         private const val MAX_IMPORT = 8 * 1024 * 1024
+        private const val LINE_PACKAGE = "jp.naver.line.android"
     }
 
     private lateinit var web: WebView
@@ -115,16 +117,26 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
-    // 返回鍵:先關編輯面板 / 回聊天列表,已經在列表才離開 App
+    // 返回鍵:先關編輯面板 / 剪圖 / 所有聊天,已經在聊天室就打開 LINE
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (!pageReady) {
-            finish()
+            openLine()
             return
         }
         web.evaluateJavascript("window.appBack && window.appBack() ? 1 : 0") { r ->
-            if (r != "1") finish()
+            if (r != "1") openLine()
         }
+    }
+
+    // 離開:打開 LINE(停在 LINE 上次的畫面),這個 App 整個關掉、不留在最近使用
+    private fun openLine() {
+        try {
+            packageManager.getLaunchIntentForPackage(LINE_PACKAGE)?.let { startActivity(it) }
+        } catch (e: Exception) {
+            // 沒裝 LINE 就單純關掉
+        }
+        finishAndRemoveTask()
     }
 
     private fun setBars(color: String) {
@@ -154,6 +166,11 @@ class MainActivity : Activity() {
                 tmp.writeText(json)
                 tmp.renameTo(dataFile)
             }
+        }
+
+        @JavascriptInterface
+        fun openLine() {
+            runOnUiThread { this@MainActivity.openLine() }
         }
 
         @JavascriptInterface

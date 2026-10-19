@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fa3e0"/><stop offset=".6" stop-color="#a9d2f2"/><stop offset="1" stop-color="#e8f3fb"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff0a8"/><stop offset=".35" stop-color="#e9b93c"/><stop offset=".7" stop-color="#b5801c"/><stop offset="1" stop-color="#7a4f0e"/>
+    </linearGradient>
+    <linearGradient id="goldv" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe98a"/><stop offset=".5" stop-color="#d9a52e"/><stop offset="1" stop-color="#8a5a10"/>
+    </linearGradient>
+    <radialGradient id="face" cx=".45" cy=".4" r=".7">
+      <stop offset="0" stop-color="#ffe9a0"/><stop offset=".55" stop-color="#e2b043"/><stop offset="1" stop-color="#9b6714"/>
+    </radialGradient>
+    <linearGradient id="ray" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#a8761a"/><stop offset=".5" stop-color="#e7bb45"/><stop offset="1" stop-color="#fff2b0"/>
+    </linearGradient>
+    <clipPath id="c"><circle cx="256" cy="256" r="256"/></clipPath>
+  </defs>
+  <g clip-path="url(#c)">
+    <rect width="512" height="512" fill="url(#sky)"/>
+    <g opacity=".75" fill="#fff">
+      <ellipse cx="90" cy="120" rx="70" ry="22"/><ellipse cx="420" cy="90" rx="80" ry="20"/>
+    </g>
+    <!-- 背光的金色光芒(千手) -->
+    <g transform="translate(256 330)">
+      <g fill="url(#ray)" stroke="#7a4f0e" stroke-width="3">
+        <path id="r" d="M-14 0 L-9 -265 Q0 -285 9 -265 L14 0Z"/>
+        <use href="#r" transform="rotate(-62)"/><use href="#r" transform="rotate(-48)"/><use href="#r" transform="rotate(-34)"/>
+        <use href="#r" transform="rotate(-20)"/><use href="#r" transform="rotate(20)"/><use href="#r" transform="rotate(34)"/>
+        <use href="#r" transform="rotate(48)"/><use href="#r" transform="rotate(62)"/><use href="#r" transform="rotate(-76)"/><use href="#r" transform="rotate(76)"/>
+      </g>
+    </g>
+    <!-- 身體 -->
+    <path d="M60 512 C70 420 150 380 200 372 L312 372 C362 380 442 420 452 512Z" fill="url(#gold)" stroke="#7a4f0e" stroke-width="3"/>
+    <path d="M200 380 Q256 470 312 380" fill="none" stroke="#8a5a10" stroke-width="5"/>
+    <path d="M150 420 Q200 470 230 512 M362 420 Q312 470 282 512" fill="none" stroke="#9b6a14" stroke-width="4"/>
+    <circle cx="256" cy="420" r="14" fill="#c0392b" stroke="#7a4f0e" stroke-width="3"/>
+    <!-- 脖子 -->
+    <path d="M222 330 L222 380 Q256 395 290 380 L290 330Z" fill="url(#face)"/>
+    <path d="M226 356 Q256 366 286 356 M228 372 Q256 382 284 372" fill="none" stroke="#9b6714" stroke-width="3"/>
+    <!-- 耳朵(長耳垂) -->
+    <path d="M178 238 C160 236 160 300 176 330 C186 345 196 330 192 300Z" fill="url(#face)" stroke="#8a5a10" stroke-width="3"/>
+    <path d="M334 238 C352 236 352 300 336 330 C326 345 316 330 320 300Z" fill="url(#face)" stroke="#8a5a10" stroke-width="3"/>
+    <!-- 臉 -->
+    <path d="M186 220 C186 170 326 170 326 220 C326 300 296 345 256 345 C216 345 186 300 186 220Z" fill="url(#face)" stroke="#8a5a10" stroke-width="3"/>
+    <!-- 眉、閉眼、白毫、鼻、嘴 -->
+    <path d="M206 236 Q226 222 246 234 M266 234 Q286 222 306 236" fill="none" stroke="#6b430c" stroke-width="4" stroke-linecap="round"/>
+    <path d="M210 258 Q227 268 244 258 M268 258 Q285 268 302 258" fill="none" stroke="#5a370a" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="256" cy="222" r="5" fill="#7a4f0e"/>
+    <path d="M256 240 L250 292 Q256 298 264 292" fill="none" stroke="#8a5a10" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M238 314 Q256 324 274 314" fill="none" stroke="#7a3d0a" stroke-width="4" stroke-linecap="round"/>
+    <path d="M244 314 Q256 309 268 314" fill="none" stroke="#7a3d0a" stroke-width="2.5"/>
+    <!-- 頭髮(額前) -->
+    <path d="M186 214 C190 176 322 176 326 214 C300 196 212 196 186 214Z" fill="#3a2a14"/>
+    <!-- 寶冠 -->
+    <path d="M172 200 L188 120 L214 160 L234 92 L256 140 L278 92 L298 160 L324 120 L340 200 Q256 182 172 200Z" fill="url(#goldv)" stroke="#7a4f0e" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M206 64 Q256 20 306 64 L298 140 Q256 128 214 140Z" fill="url(#goldv)" stroke="#7a4f0e" stroke-width="3"/>
+    <path d="M226 52 Q256 30 286 52 L280 90 Q256 84 232 90Z" fill="#f4cf62" stroke="#7a4f0e" stroke-width="2.5"/>
+    <circle cx="256" cy="110" r="13" fill="#2f7d5b" stroke="#7a4f0e" stroke-width="3"/>
+    <circle cx="256" cy="168" r="9" fill="#c0392b" stroke="#7a4f0e" stroke-width="2.5"/>
+    <circle cx="210" cy="176" r="6" fill="#2f7d5b"/><circle cx="302" cy="176" r="6" fill="#2f7d5b"/>
+    <path d="M176 198 Q256 178 336 198" fill="none" stroke="#fff3b8" stroke-width="3" opacity=".8"/>
+  </g>
+</svg>
