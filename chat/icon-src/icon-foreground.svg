@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 432 432" width="432" height="432">
-  <!-- adaptive icon 前景(108dp):中間圓形佛像 + 下方 LINE 捷徑樣式的小圓章 -->
+  <!-- adaptive icon 前景(108dp):中間圓形佛像(buddha.png = buddha-photo.jpg 裁成圓形) + 下方 LINE 捷徑樣式的小圓章 -->
   <image href="buddha.png" x="114" y="106" width="204" height="204"/>
   <circle cx="216" cy="300" r="40" fill="#4c5b84" stroke="#fff" stroke-width="0"/>
   <path d="M216 278c-15 0-27 9-27 21 0 7 4 13 11 17l-2 11 11-8c2 .3 5 .5 7 .5 15 0 27-9 27-21s-12-21-27-21z" fill="#fff"/>
