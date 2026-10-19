@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 離開時打開 LINE(Android 11 以後要先宣告才找得到 LINE) -->
+    <queries>
+        <package android:name="jp.naver.line.android" />
+    </queries>
+
+    <application
+        android:label="看護陳姐"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- singleTask:從分享或桌面再打開都回到同一個畫面;excludeFromRecents:多工畫面看不到;
+             adjustResize:鍵盤出現時輸入框往上推 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- LINE「傳送聊天記錄」分享過來的 .txt 直接匯入 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!-- 檔案管理員打開 .txt -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

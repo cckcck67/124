@@ -18,7 +18,7 @@ class Check(HTMLParser):
             self.errors.append(f'</{tag}> 不成對(目前在 {self.stack[-3:]})')
 
 bad = False
-for f in sorted(glob.glob('app/src/main/assets/*.html')):
+for f in sorted(glob.glob('app/src/main/assets/*.html') + glob.glob('chat/src/main/assets/*.html')):
     text = open(f, encoding='utf-8').read()
     c = Check()
     c.feed(text)

@@ -34,6 +34,7 @@ jobs:
       - name: Rename APK and write version info
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
+          cp chat/build/outputs/apk/debug/chat-debug.apk PrankChat.apk
           echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"2.0.${{ github.run_number }}\"}" > version.json
           cat version.json
       - name: Remove files no longer published
@@ -70,3 +71,29 @@ jobs:
           files: |
             VrWebPlayer.apk
             version.json
+      - name: Publish prank chat app (its own release, chat-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chat-latest
+          name: 整人聊天 1.0.${{ github.run_number }}
+          body: |
+            ## 整人聊天(Android)
+            偽裝成 LINE 好友捷徑的聊天畫面,所有對話都可以自己編輯。和 VR網頁播放器是兩個不同的 App,可以同時安裝。
+
+            **下載安裝**:用手機瀏覽器下載下方的 `PrankChat.apk`,點開安裝;新版直接覆蓋,已編好的對話會保留。
+            桌面名稱「看護陳姐」(LINE 捷徑樣式的佛像圖示)。
+
+            **怎麼用**
+            - 打開直接進聊天;左上「<」或返回鍵 = 打開真的 LINE,不會留在最近使用
+            - 長按上方名字 = 管理選單:鎖定、批次新增對話、從截圖剪貼圖 / 頭像、貼圖庫、切換聊天、匯入、清空
+            - 點訊息 = 修改;長按送出鍵 = 用對方身分送出
+            - 給朋友看之前先「鎖定」,點訊息不會跳出編輯
+
+            **批次新增寫法**(一行一則):`我: 內容`、`對方: 內容`、`20:16 我: 內容`、`--- 8月3日 週一`、`[貼圖:1]`
+
+            完整說明:https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/chat.md
+
+            版本 1.0.${{ github.run_number }}(${{ github.sha }})
+          prerelease: false
+          make_latest: false   # 首頁的「最新版本」留給 VR網頁播放器
+          files: PrankChat.apk

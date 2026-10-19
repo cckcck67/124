@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>聊天</title>
+<style>
+/* 顏色、大小都是對照 LINE 截圖量出來的(手機寬約 393px) */
+:root {
+  --green: #06c755; --bubble-me: #9de694; --room-bg: #8dacd8; --chip: #7692b9; --meta: #3f536e;
+  --gray: #8e8e93; --line: #ececec; --text: #111;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; background: #fff; color: var(--text);
+  font-family: sans-serif; overflow: hidden; }   /* sans-serif = 手機系統字型,和 LINE 一樣 */
+button { font: inherit; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; background: #fff; }
+.hidden { display: none !important; }
+svg { display: block; }
+.ico { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; position: relative; flex: none; }
+
+/* ---------- 聊天室 ---------- */
+#room { background-color: var(--room-bg);
+  background-image:
+    radial-gradient(ellipse 55% 9% at 18% 46%, rgba(255,255,255,.16), transparent 70%),
+    radial-gradient(ellipse 40% 7% at 30% 43%, rgba(255,255,255,.12), transparent 70%),
+    radial-gradient(ellipse 60% 10% at 78% 78%, rgba(255,255,255,.15), transparent 70%),
+    radial-gradient(ellipse 35% 6% at 66% 75%, rgba(255,255,255,.12), transparent 70%),
+    radial-gradient(ellipse 50% 8% at 25% 92%, rgba(255,255,255,.12), transparent 70%);
+  background-size: cover; background-position: center; }
+.rhead { display: flex; align-items: center; height: 57px; padding: 0 4px 0 2px; flex: none; }
+.rhead .title { flex: 1; min-width: 0; display: flex; align-items: baseline; font-size: 23px; font-weight: 700; padding-left: 4px; }
+.rhead .tn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rhead .tc { flex: none; margin-left: 8px; }
+.announce { margin: 0 4px 2px; background: #fff; border-radius: 6px; display: flex; align-items: center; height: 46px; padding: 0 14px; gap: 12px;
+  font-size: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.12); flex: none; }
+.announce .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mwrap { flex: 1; position: relative; min-height: 0; }
+.msgs { position: absolute; inset: 0; overflow-y: auto; padding: 2px 8px 12px; }
+.chip { text-align: center; margin: 10px 0 12px; }
+.chip span, .fchip { display: inline-block; background: var(--chip); color: #fff; font-size: 15px; border-radius: 15px; padding: 0 11px; line-height: 29px; }
+.fchip { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 2; white-space: nowrap; }
+.fchip.on { opacity: 1; }
+.down { position: absolute; right: 8px; bottom: 10px; width: 36px; height: 36px; background: #fff; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  display: flex; align-items: center; justify-content: center; z-index: 2; }
+.m { display: flex; align-items: flex-start; margin-top: 9px; }
+.m.cont { margin-top: 5px; }
+.m.l .avs { width: 31px; height: 31px; flex: none; font-size: 14px; margin-right: 6px; }
+.m.l .avs.blank { visibility: hidden; }
+.m.r { justify-content: flex-end; }
+.m .col { display: flex; flex-direction: column; max-width: 81%; min-width: 0; }
+.m .who { font-size: 14px; color: #445468; margin: 4px 0 4px 2px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m .line { display: flex; align-items: flex-end; gap: 6px; }
+.m.r .line { flex-direction: row-reverse; }
+.m .meta { font-size: 13.5px; color: var(--meta); line-height: 1.45; white-space: nowrap; flex: none; padding-bottom: 0; }
+.m.r .meta { text-align: right; }
+.bub { position: relative; background: #fff; border-radius: 19px; padding: 5.5px 13px; font-size: 20.5px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.m.r .bub { background: var(--bubble-me); }
+.m.l.tail .bub::before, .m.r.tail .bub::before { content: ''; position: absolute; top: 0; width: 13px; height: 13px; background: inherit; }
+.m.l.tail .bub::before { left: -5px; clip-path: polygon(0 0, 100% 0, 100% 100%); }
+.m.r.tail .bub::before { right: -5px; clip-path: polygon(0 0, 100% 0, 0 100%); }
+.stk { width: 157px; height: 157px; object-fit: contain; display: block; }
+.stk.emo { font-size: 110px; line-height: 157px; text-align: center; }
+.pic { max-width: 220px; max-height: 280px; border-radius: 14px; display: block; }
+.pic.ph { width: 170px; height: 130px; background: #dfe5ee; display: flex; align-items: center; justify-content: center; font-size: 34px; }
+.call { display: flex; align-items: center; gap: 8px; }
+.call .ci { width: 32px; height: 32px; border-radius: 50%; background: #e9eef5; display: flex; align-items: center; justify-content: center; }
+.m.r .call .ci { background: rgba(255,255,255,.55); }
+.ibar { display: flex; align-items: center; gap: 2px; height: 54px; padding: 0 6px 0 4px; background: #fff; flex: none; }
+.ibar .box { flex: 1; min-width: 0; display: flex; align-items: center; background: #f2f2f4; border-radius: 20px; padding: 0 4px 0 14px; min-height: 40px; margin-left: 6px; }
+.ibar textarea { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 17px; resize: none; outline: none; max-height: 96px;
+  padding: 9px 0; line-height: 1.3; font-family: inherit; }
+.asbar { background: #fff8d6; font-size: 13px; padding: 4px 12px; display: flex; justify-content: space-between; align-items: center; flex: none; }
+.empty { text-align: center; color: #999; padding: 40px 20px; font-size: 14px; line-height: 1.8; }
+
+/* ---------- 管理:所有聊天(只有自己會看到) ---------- */
+.mtop { display: flex; align-items: center; height: 54px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+.mtop .tt { flex: 1; font-size: 19px; font-weight: 700; }
+.search { margin: 8px 12px 4px; background: #f2f2f4; border-radius: 20px; display: flex; align-items: center; padding: 0 12px; height: 38px; gap: 8px; }
+.search input { flex: 1; border: 0; background: transparent; font-size: 16px; outline: none; color: #111; }
+.list { flex: 1; overflow-y: auto; }
+.row { display: flex; align-items: center; padding: 9px 14px; gap: 12px; }
+.row:active { background: #f5f5f5; }
+.row.cur { background: #eefaf2; }
+.av { width: 52px; height: 52px; border-radius: 50%; flex: none; position: relative; background: #ccc center/cover no-repeat;
+  display: flex; align-items: center; justify-content: center; color: #fff; font-size: 21px; font-weight: 600; }
+.row .mid { flex: 1; min-width: 0; }
+.row .name { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .prev { font-size: 14px; color: var(--gray); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .time { font-size: 12px; color: var(--gray); white-space: nowrap; align-self: flex-start; padding-top: 4px; }
+
+/* ---------- 從截圖剪下 ---------- */
+#crop { background: #111; z-index: 15; }
+.ctop { display: flex; align-items: center; gap: 6px; padding: 8px; background: #222; color: #fff; flex: none; flex-wrap: wrap; }
+.ctop .btn { flex: 0 0 auto; padding: 8px 12px; font-size: 14px; }
+.ctop .btn.on { background: var(--green); color: #fff; }
+.ctip { color: #ccc; font-size: 12px; padding: 4px 10px 6px; background: #222; flex: none; }
+.cbody { flex: 1; overflow-y: auto; position: relative; }
+.cbody.sel { touch-action: none; }
+.cbody canvas { width: 100%; display: block; }
+.crect { position: absolute; border: 2px solid #ffea00; box-shadow: 0 0 0 9999px rgba(0,0,0,.45); pointer-events: none; }
+.crect.round { border-radius: 50%; }
+.checker { background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0/16px 16px; border-radius: 8px; display: flex; justify-content: center; padding: 10px; }
+.checker img { max-width: 200px; max-height: 200px; }
+
+/* ---------- 貼圖庫 ---------- */
+.sgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0; }
+.sgrid div { position: relative; aspect-ratio: 1; background: #f3f4f6; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.sgrid img { max-width: 90%; max-height: 90%; }
+.sgrid span { position: absolute; left: 4px; top: 2px; font-size: 11px; color: #888; }
+
+/* ---------- 編輯面板 ---------- */
+.mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; z-index: 20; }
+.sheet { background: #fff; width: 100%; max-height: 90%; overflow-y: auto; border-radius: 16px 16px 0 0; padding: 14px 16px 18px; }
+.sheet h3 { margin: 0 0 10px; font-size: 17px; }
+.fld { margin: 10px 0; }
+.fld label.lb { display: block; font-size: 13px; color: #666; margin-bottom: 4px; }
+.fld input[type=text], .fld textarea, .fld select { width: 100%; font-size: 16px; padding: 9px 10px; border: 1px solid #ddd; border-radius: 8px; font-family: inherit; background: #fff; }
+.fld textarea { min-height: 80px; }
+.fld textarea.big { min-height: 220px; font-size: 15px; line-height: 1.5; }
+.fld.ck label { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.fld.ck input { width: 20px; height: 20px; }
+.imgf { display: flex; align-items: center; gap: 10px; }
+.imgf .pv { width: 56px; height: 56px; border-radius: 8px; background: #eee center/contain no-repeat; flex: none; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.btn { flex: 1 1 auto; border: 0; background: #eef0f3; color: #111; border-radius: 10px; padding: 11px 12px; font-size: 15px; }
+.btn.pri { background: var(--green); color: #fff; font-weight: 600; }
+.btn.dan { background: #ffe5e7; color: #d0021b; }
+.btn.sm { flex: 0 0 auto; padding: 8px 12px; font-size: 14px; }
+.menu .btn { display: block; width: 100%; text-align: left; margin: 6px 0; }
+.hint { font-size: 12px; color: #888; line-height: 1.6; margin-top: 8px; }
+.hint code { background: #f2f2f4; padding: 0 3px; border-radius: 3px; }
+.toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: rgba(0,0,0,.78); color: #fff; padding: 8px 16px;
+  border-radius: 18px; font-size: 14px; z-index: 30; pointer-events: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<!-- 聊天室(打開 App 直接到這裡) -->
+<div id="room" class="screen">
+  <div class="rhead">
+    <div class="ico" id="btnBack"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2"><path d="M15 3L6 12l9 9"/></svg></div>
+    <div class="title" id="roomTitle"><span class="tn" id="titleName"></span><span class="tc" id="titleCount"></span></div>
+    <div class="ico"><svg width="25" height="25" viewBox="0 0 26 26" fill="none" stroke="#111" stroke-width="2"><circle cx="11.5" cy="11.5" r="8"/><path d="M17.5 17.5l5 5M11.5 7v4.5l3 2"/></svg></div>
+    <div class="ico"><svg width="25" height="25" viewBox="0 0 26 26" fill="none" stroke="#111" stroke-width="2"><path d="M6 3l4 1 1.5 5-2.5 2a13 13 0 0 0 6 6l2-2.5 5 1.5 1 4c-1 1.5-3 2-5 1.5C10.5 19.5 6.5 15.5 4.5 9 4 7 4.5 4.5 6 3z" stroke-linejoin="round"/></svg></div>
+    <div class="ico"><svg width="25" height="25" viewBox="0 0 26 26"><rect x="4" y="5" width="18" height="17" rx="3" fill="none" stroke="#111" stroke-width="2"/><path d="M9 3v4M17 3v4" stroke="#111" stroke-width="2"/><text x="13" y="19" font-size="9" font-weight="700" text-anchor="middle" fill="#111">31</text></svg></div>
+    <div class="ico" id="btnMenu"><svg width="25" height="25" viewBox="0 0 26 26" stroke="#111" stroke-width="2"><path d="M4 7h18M4 13h18M4 19h18"/></svg></div>
+  </div>
+  <div class="announce" id="announce">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4b7bf5" stroke-width="1.8" stroke-linejoin="round"><path d="M3 9v6h3l9 5V4L6 9zM6 15l1.5 5"/></svg>
+    <div class="t" id="announceText"></div>
+    <svg width="20" height="20" viewBox="0 0 18 18" fill="none" stroke="#bbb" stroke-width="1.6"><path d="M3 6l6 6 6-6"/></svg>
+  </div>
+  <div class="mwrap">
+    <div class="msgs" id="msgs"></div>
+    <div class="fchip" id="fchip"></div>
+    <div class="down hidden" id="btnDown"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#111" stroke-width="1.8"><path d="M10 3v14M4 11l6 6 6-6"/></svg></div>
+  </div>
+  <div class="asbar hidden" id="asbar"><span id="asText"></span><button class="btn sm" id="asOff">改回自己</button></div>
+  <div class="ibar">
+    <div class="ico" id="btnTools"><svg width="26" height="26" viewBox="0 0 26 26" stroke="#111" stroke-width="2"><path d="M13 3v20M3 13h20"/></svg></div>
+    <div class="ico" id="btnCam"><svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#111" stroke-width="2"><rect x="3" y="7" width="20" height="15" rx="3"/><path d="M9 7l2-3h4l2 3"/><circle cx="13" cy="14.5" r="4"/></svg></div>
+    <div class="ico" id="btnPic"><svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#111" stroke-width="2"><rect x="4" y="4" width="18" height="18" rx="2"/><path d="M8 18l4-6 3 4 2-2 2 4z" fill="#111"/></svg></div>
+    <div class="box">
+      <textarea id="inp" rows="1"></textarea>
+      <div class="ico" id="btnEmo"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M8 14c1 1.5 2.4 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="10" r=".8" fill="#666"/><circle cx="15" cy="10" r=".8" fill="#666"/></svg></div>
+    </div>
+    <div class="ico" id="btnSend"></div>
+  </div>
+</div>
+
+<!-- 所有聊天(管理用,長按聊天室標題 → 切換聊天) -->
+<div id="home" class="screen hidden">
+  <div class="mtop">
+    <div class="ico" id="homeBack"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2"><path d="M15 3L6 12l9 9"/></svg></div>
+    <div class="tt">所有聊天(點一下切換)</div>
+    <div class="ico" id="btnAdd"><svg width="24" height="24" viewBox="0 0 26 26" stroke="#111" stroke-width="2.2"><path d="M13 4v18M4 13h18"/></svg></div>
+  </div>
+  <div class="search">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#999" stroke-width="2"><circle cx="8" cy="8" r="5.5"/><path d="M12 12l4 4"/></svg>
+    <input id="q" type="text" placeholder="搜尋">
+  </div>
+  <div class="list" id="list"></div>
+</div>
+
+<!-- 從截圖剪下貼圖 / 頭像 -->
+<div id="crop" class="screen hidden">
+  <div class="ctop">
+    <button class="btn" id="cClose">✕ 關閉</button>
+    <button class="btn" id="cModeStk">貼圖</button>
+    <button class="btn" id="cModeAv">頭像</button>
+    <button class="btn" id="cScroll">✋ 捲動</button>
+    <button class="btn pri" id="cDone">剪下</button>
+  </div>
+  <div class="ctip" id="cTip"></div>
+  <div class="cbody sel" id="cBody"><canvas id="cCanvas"></canvas><div class="crect hidden" id="cRect"></div></div>
+</div>
+
+<input type="file" id="filePick" class="hidden">
+
+<script>
+'use strict';
+/*
+ * 整人聊天(看護陳姐):偽裝成 LINE 好友捷徑的聊天室,說明見 docs/chat.md
+ *
+ * 資料 S(存在 Android 的 chats.json;電腦瀏覽器測試時存 localStorage):
+ *   ver        資料版本(DATA_VER),舊資料在 load() 升級
+ *   me         { name, avatar }  自己
+ *   current    打開 App 時進入的聊天 id
+ *   locked     鎖定時點訊息、＋ 不會跳出編輯
+ *   stickers   貼圖庫 [{ id, src }](批次新增 [貼圖:n] 的 n 從 1 開始)
+ *   chats      [{ id, name, avatar, count, announce, bg, group,
+ *                 members: [{ id, name, avatar }],     左邊的人(一對一只有一位,id 'f')
+ *                 items: [{ t:'date', text } |       日期 / 置中文字
+ *                         { t:'msg', who:'me'|成員id, kind:'text'|'sticker'|'image'|'call', text, src, time, read }] }]
+ *
+ * 和 Android 的介面(window.Android):load() / save(json) / setBars(顏色) / openLine()
+ * Android 呼叫這頁:appBack()(返回鍵)、importLineText(文字)(LINE 分享過來的聊天記錄)
+ */
+// ================= 資料 =================
+const SAVE_KEY = 'prankchat';
+const WEEK = '日一二三四五六';
+const COLORS = ['#f4a261', '#2a9d8f', '#e76f51', '#6d83c4', '#c77dba', '#5aa469', '#d4a017', '#8d6e63'];
+const MIC = '<svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#111" stroke-width="2"><rect x="9" y="3" width="8" height="13" rx="4"/><path d="M5 12a8 8 0 0 0 16 0M13 20v4"/></svg>';
+const SEND = '<svg width="30" height="30" viewBox="0 0 28 28"><circle cx="14" cy="14" r="13" fill="#06c755"/><path d="M8 14l12-6-4 13-3-5z" fill="#fff"/></svg>';
+const DEFAULT_NAME = '看護陳姐';
+const DATA_VER = 2;
+
+let uid = Date.now();
+const nid = () => 'i' + (uid++).toString(36);
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pad = n => String(n).padStart(2, '0');
+const nowTime = () => { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+
+function dateChip(d) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const x = new Date(d); x.setHours(0, 0, 0, 0);
+  const diff = Math.round((t - x) / 86400000);
+  if (diff === 0) return '今天';
+  if (diff === 1) return '昨天';
+  const s = (x.getMonth() + 1) + '月' + x.getDate() + '日 週' + WEEK[x.getDay()];
+  return x.getFullYear() === t.getFullYear() ? s : x.getFullYear() + '年' + s;
+}
+
+function msg(who, text, time, extra) { return Object.assign({ id: nid(), t: 'msg', who, kind: 'text', text, time, read: who === 'me' ? '已讀' : '' }, extra || {}); }
+function chip(text) { return { id: nid(), t: 'date', text }; }
+function chat(name, o) {
+  return Object.assign({ id: nid(), name, avatar: '', count: '', pinned: false, muted: false, preview: '', time: '', unread: '',
+    announce: '', bg: '', group: false, members: [{ id: 'f', name, avatar: '' }], items: [] }, o || {});
+}
+function chenJie() {
+  return chat(DEFAULT_NAME, { avatar: 'buddha.jpg' });
+}
+
+// 第一次打開時的內容,之後全部可以改
+function sample() {
+  const today = dateChip(new Date());
+  const cj = chenJie();
+  const bf = chat('蝴蝶🦋啾啾', { announce: '台新銀行812...', items: [
+    chip('9月28日 週一'),
+    msg('me', '', '21:08', { kind: 'sticker', text: '👌' }),
+    msg('f', '廚房我們今天吃什麼', '22:50'),
+    msg('me', '炒麵', '22:50'),
+    msg('f', '喔喔', '23:04'),
+    chip('9月29日 週二'),
+    msg('f', '廚房我們晚上吃什麼', '18:48'),
+    msg('me', '用心之作\n誠意滿滿\n精心烹製\n講究工法\n用心調味\n技法純熟\n功夫紮實\n火候精準\n手路細緻..\n的飯菜', '18:50'),
+    msg('f', '', '19:00', { kind: 'sticker', text: '😋' })
+  ] });
+  return {
+    ver: DATA_VER,
+    me: { name: '我', avatar: '' },
+    locked: false,
+    current: cj.id,
+    stickers: [],
+    chats: [
+      cj,
+      chat('阿里巴巴養生會館', { count: '98', group: true, members: [{ id: 'f', name: '❤️Dongfang東方❤️', avatar: '' }],
+        items: [chip(today), msg('f', '', '20:38', { kind: 'sticker', text: '🌸' })] }),
+      chat('高雄推薦當鋪-高發當鋪', { items: [chip(today), msg('f', '感謝', '20:24')] }),
+      bf
+    ]
+  };
+}
+
+let S;
+function load() {
+  let raw = '';
+  try { raw = window.Android ? Android.load() : localStorage.getItem(SAVE_KEY); } catch (e) {}
+  try { S = raw ? JSON.parse(raw) : null; } catch (e) { S = null; }
+  if (!S || !Array.isArray(S.chats)) S = sample();
+  // 舊版資料:補上新欄位;第一次升級時加入「看護陳姐」並設成打開時的聊天
+  if (!Array.isArray(S.stickers)) S.stickers = [];
+  if (!S.me) S.me = { name: '我', avatar: '' };
+  // 第 2 版:清空所有對話重新輸入(舊的範例日期「昨天」「今天」會擋在最上面)
+  if ((S.ver || 1) < 2) S.chats.forEach(c => { c.items = []; });
+  S.ver = DATA_VER;
+  if (!S.current || !S.chats.some(c => c.id === S.current)) {
+    let c = S.chats.find(x => x.name === DEFAULT_NAME);
+    if (!c) { c = chenJie(); S.chats.unshift(c); }
+    S.current = c.id;
+  }
+}
+let saveTimer = 0;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const s = JSON.stringify(S);
+    try { if (window.Android) Android.save(s); else localStorage.setItem(SAVE_KEY, s); } catch (e) { toast('儲存失敗:' + e.message); }
+  }, 300);
+}
+function setBars(color) { try { if (window.Android) Android.setBars(color); } catch (e) {} }
+
+// ================= 共用 =================
+function toast(t) {
+  const d = document.createElement('div'); d.className = 'toast'; d.textContent = t;
+  document.body.appendChild(d); setTimeout(() => d.remove(), 1800);
+}
+function colorOf(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.codePointAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
+function firstChar(s) { const m = String(s || '?').match(/[\p{L}\p{N}]/u); return m ? m[0] : '?'; }
+function avatarHtml(name, src, cls) {
+  const style = src ? `background-image:url('${src}')` : `background-color:${colorOf(name)}`;
+  return `<div class="av ${cls || ''}" style="${style}">${src ? '' : esc(firstChar(name))}</div>`;
+}
+function onLong(el, fn, shortFn) {
+  let timer = 0, fired = false, sx = 0, sy = 0;
+  el.addEventListener('touchstart', e => { fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY; timer = setTimeout(() => { fired = true; fn(e); }, 550); }, { passive: true });
+  el.addEventListener('touchmove', e => { if (Math.abs(e.touches[0].clientX - sx) + Math.abs(e.touches[0].clientY - sy) > 10) clearTimeout(timer); }, { passive: true });
+  el.addEventListener('touchend', e => { clearTimeout(timer); if (fired) e.preventDefault(); });
+  el.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(timer); if (!fired) { fired = true; fn(e); } });
+  if (shortFn) el.addEventListener('click', e => { if (!fired) shortFn(e); });
+}
+function move(arr, x, d) { const i = arr.indexOf(x), j = i + d; if (j < 0 || j >= arr.length) return; arr[i] = arr[j]; arr[j] = x; }
+
+function pickFile(accept) {
+  return new Promise(resolve => {
+    const f = $('filePick'); f.accept = accept; f.value = '';
+    f.onchange = () => resolve(f.files[0] || null);
+    f.click();
+  });
+}
+function loadImage(file) {
+  return new Promise(resolve => {
+    if (!file) return resolve(null);
+    const r = new FileReader();
+    r.onload = () => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = r.result; };
+    r.readAsDataURL(file);
+  });
+}
+function scaled(img, maxSize, png, sx, sy, sw, sh) {
+  sx = sx || 0; sy = sy || 0; sw = sw || img.width; sh = sh || img.height;
+  const k = Math.min(1, maxSize / Math.max(sw, sh));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+  c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return png ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.88);
+}
+// 選圖片並縮小(存在手機裡的資料不會太大)
+async function pickImage(maxSize, png) {
+  const img = await loadImage(await pickFile('image/*'));
+  return img ? scaled(img, maxSize, png) : '';
+}
+async function pickText() {
+  const file = await pickFile('.txt,text/plain'); if (!file) return '';
+  return new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsText(file, 'utf-8'); });
+}
+
+// ---------- 底部面板 ----------
+let sheetStack = [];
+function panel(html) {
+  const mask = document.createElement('div'); mask.className = 'mask';
+  const sh = document.createElement('div'); sh.className = 'sheet'; mask.appendChild(sh);
+  sh.innerHTML = html;
+  const close = () => { mask.remove(); sheetStack = sheetStack.filter(x => x !== close); };
+  sheetStack.push(close);
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
+  document.body.appendChild(mask);
+  return { sh, close };
+}
+// fields: [{k, label, type: text|area|big|select|check|image, opts, size, png}]
+// buttons: [{label, cls, fn(values) -> 回傳 false 不關閉}]
+function sheet(title, fields, buttons, hint) {
+  let h = `<h3>${esc(title)}</h3>`;
+  const vals = {};
+  (fields || []).forEach((f, i) => {
+    vals[f.k] = f.v;
+    if (f.type === 'check') h += `<div class="fld ck"><label><input type="checkbox" data-i="${i}" ${f.v ? 'checked' : ''}>${esc(f.label)}</label></div>`;
+    else if (f.type === 'image') h += `<div class="fld"><label class="lb">${esc(f.label)}</label><div class="imgf"><div class="pv" data-pv="${i}" style="${f.v ? `background-image:url('${f.v}')` : ''}"></div><button class="btn sm" data-pick="${i}">選擇圖片</button><button class="btn sm" data-clear="${i}">移除</button></div></div>`;
+    else if (f.type === 'select') h += `<div class="fld"><label class="lb">${esc(f.label)}</label><select data-i="${i}">${f.opts.map(o => `<option value="${esc(o[0])}" ${o[0] === f.v ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`;
+    else if (f.type === 'area' || f.type === 'big') h += `<div class="fld"><label class="lb">${esc(f.label)}</label><textarea data-i="${i}" class="${f.type}" placeholder="${esc(f.ph || '')}">${esc(f.v)}</textarea></div>`;
+    else h += `<div class="fld"><label class="lb">${esc(f.label)}</label><input type="text" data-i="${i}" value="${esc(f.v)}" placeholder="${esc(f.ph || '')}"></div>`;
+  });
+  h += `<div class="btns ${fields && fields.length ? '' : 'menu'}">${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-b="${i}">${esc(b.label)}</button>`).join('')}</div>`;
+  if (hint) h += `<div class="hint">${hint}</div>`;
+  const { sh, close } = panel(h);
+  sh.querySelectorAll('[data-pick]').forEach(b => b.onclick = async () => {
+    const f = fields[b.dataset.pick]; const src = await pickImage(f.size || 600, f.png);
+    if (src) { vals[f.k] = src; sh.querySelector(`[data-pv="${b.dataset.pick}"]`).style.backgroundImage = `url('${src}')`; }
+  });
+  sh.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => {
+    vals[fields[b.dataset.clear].k] = ''; sh.querySelector(`[data-pv="${b.dataset.clear}"]`).style.backgroundImage = '';
+  });
+  sh.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
+    sh.querySelectorAll('[data-i]').forEach(el => { const f = fields[el.dataset.i]; vals[f.k] = f.type === 'check' ? el.checked : el.value; });
+    if (buttons[b.dataset.b].fn(vals) !== false) close();
+  });
+  return close;
+}
+
+// ================= 聊天室 =================
+let cur = null;      // 目前聊天
+let asWho = 'me';    // 送出訊息用的身分
+function memberOf(c, who) { return c.members.find(m => m.id === who) || c.members[0] || { name: c.name, avatar: '' }; }
+function readText(c) { return c.group && +c.count > 2 ? '已讀 ' + Math.round((+c.count - 1) / 2) : '已讀'; }
+function lastTime(c, upto) {
+  const items = upto == null ? c.items : c.items.slice(0, upto + 1);
+  const m = [...items].reverse().find(x => x.t === 'msg' && /^\d{1,2}:\d{2}$/.test(x.time));
+  return m ? m.time : '';
+}
+
+function openRoom(id) {
+  cur = S.chats.find(x => x.id === id) || S.chats[0];
+  if (!cur) { cur = chenJie(); S.chats.unshift(cur); }
+  if (S.current !== cur.id) { S.current = cur.id; save(); }
+  asWho = 'me';
+  $('home').classList.add('hidden'); $('room').classList.remove('hidden');
+  renderRoom(true);
+}
+// 離開 = 打開真的 LINE
+function leave() {
+  try { if (window.Android) { Android.openLine(); return; } } catch (e) {}
+  toast('(手機上會在這裡打開 LINE)');
+}
+function renderRoom(toBottom) {
+  if (!cur) return;
+  const c = cur;
+  $('titleName').textContent = c.name;
+  $('titleCount').textContent = c.count ? '(' + c.count + ')' : '';
+  $('announce').classList.toggle('hidden', !c.announce);
+  $('announceText').textContent = c.announce;
+  $('room').style.backgroundImage = c.bg ? `url('${c.bg}')` : '';
+  setBars(c.bg ? '#000000' : '#8dacd8');
+  const box = $('msgs'); const keep = box.scrollTop;
+  let h = '', prev = null;
+  c.items.forEach((it, i) => {
+    if (it.t === 'date') {
+      const next = c.items[i + 1];
+      if (next && next.t !== 'date') h += `<div class="chip" data-id="${it.id}"><span>${esc(it.text)}</span></div>`;
+      prev = null; return;
+    }
+    const me = it.who === 'me';
+    const first = !prev || prev.who !== it.who;
+    const mem = me ? null : memberOf(c, it.who);
+    let body;
+    if (it.kind === 'sticker') body = it.src ? `<img class="stk" src="${it.src}">` : `<div class="stk emo">${esc(it.text || '😆')}</div>`;
+    else if (it.kind === 'image') body = it.src ? `<img class="pic" src="${it.src}">` : `<div class="pic ph">🖼️</div>`;
+    else if (it.kind === 'call') body = `<div class="bub"><div class="call"><span class="ci"><svg width="16" height="16" viewBox="0 0 26 26" fill="none" stroke="#333" stroke-width="2.4"><path d="M6 3l4 1 1.5 5-2.5 2a13 13 0 0 0 6 6l2-2.5 5 1.5 1 4c-1 1.5-3 2-5 1.5C10.5 19.5 6.5 15.5 4.5 9 4 7 4.5 4.5 6 3z"/></svg></span>${esc(it.text)}</div></div>`;
+    else body = `<div class="bub">${esc(it.text)}</div>`;
+    const meta = `<div class="meta">${me && it.read ? esc(it.read) + '<br>' : ''}${esc(it.time)}</div>`;
+    const tail = first && (it.kind === 'text' || it.kind === 'call') ? ' tail' : '';
+    if (me) h += `<div class="m r${tail}${first ? '' : ' cont'}" data-id="${it.id}"><div class="col"><div class="line">${body}${meta}</div></div></div>`;
+    else h += `<div class="m l${tail}${first ? '' : ' cont'}" data-id="${it.id}">${avatarHtml(mem.name, mem.avatar || (c.group ? '' : c.avatar), 'avs' + (first ? '' : ' blank'))}<div class="col">${c.group && first ? `<div class="who">${esc(mem.name)}</div>` : ''}<div class="line">${body}${meta}</div></div></div>`;
+    prev = it;
+  });
+  box.innerHTML = h || '<div class="empty" style="color:#fff">還沒有訊息<br>長按上方名字 →「批次新增對話」</div>';
+  box.querySelectorAll('[data-id]').forEach(el => el.addEventListener('click', () => { if (!S.locked) editItem(el.dataset.id); }));
+  progScroll = Date.now();
+  if (toBottom) box.scrollTop = box.scrollHeight; else box.scrollTop = keep;
+  updDown();
+  updAs();
+}
+
+// ---------- 捲動時上方浮出日期,停下 1.5 秒後收起(和 LINE 一樣) ----------
+let progScroll = 0, fchipTimer = 0;
+function onMsgsScroll() {
+  updDown();
+  if (Date.now() - progScroll < 150) return;          // 程式自己捲的(打開、送出)不顯示
+  const box = $('msgs'), top = box.scrollTop;
+  let text = '';
+  for (const el of box.querySelectorAll('.chip')) { if (el.offsetTop <= top + 4) text = el.textContent; else break; }
+  if (!text) return;
+  const f = $('fchip'); f.textContent = text; f.classList.add('on');
+  clearTimeout(fchipTimer); fchipTimer = setTimeout(() => f.classList.remove('on'), 1500);
+}
+function updDown() {
+  const b = $('msgs');
+  $('btnDown').classList.toggle('hidden', b.scrollHeight - b.scrollTop - b.clientHeight < 200);
+}
+
+function whoOpts(c) { return [['me', '我(右邊綠色)'], ...c.members.map(m => [m.id, m.name + '(左邊白色)'])]; }
+
+function editItem(id) {
+  const c = cur, it = c.items.find(x => x.id === id); if (!it) return;
+  const idx = () => c.items.indexOf(it);
+  const done = () => { save(); renderRoom(false); };
+  const common = [
+    { label: '上移', cls: 'sm', fn: () => { move(c.items, it, -1); done(); return false; } },
+    { label: '下移', cls: 'sm', fn: () => { move(c.items, it, 1); done(); return false; } },
+    { label: '在下面插入訊息', fn: () => { const m = msg(it.who || 'me', '', it.time || lastTime(c, idx()) || nowTime()); if (m.who === 'me') m.read = readText(c); c.items.splice(idx() + 1, 0, m); done(); editItem(m.id); } },
+    { label: '在下面批次新增', fn: () => batchAdd(idx() + 1) },
+    { label: '在下面插入日期', fn: () => { const d = chip('今天'); c.items.splice(idx() + 1, 0, d); done(); editItem(d.id); } },
+    { label: '刪除', cls: 'dan', fn: () => { c.items.splice(idx(), 1); done(); } }
+  ];
+  if (it.t === 'date') {
+    sheet('編輯日期 / 置中文字', [{ k: 'text', label: '文字(例如「今天」「昨天」「9月29日 週二」「小明已收回訊息」)', v: it.text }],
+      [{ label: '儲存', cls: 'pri', fn: v => { it.text = v.text; done(); } }, ...common]);
+    return;
+  }
+  sheet('編輯訊息', [
+    { k: 'who', label: '誰說的', type: 'select', opts: whoOpts(c), v: it.who },
+    { k: 'kind', label: '種類', type: 'select', opts: [['text', '文字'], ['sticker', '貼圖'], ['image', '照片'], ['call', '通話紀錄']], v: it.kind },
+    { k: 'text', label: '內容(貼圖沒有圖片時,這裡放一個表情符號會顯示成大貼圖)', type: 'area', v: it.text },
+    { k: 'src', label: '圖片(照片用;貼圖建議用下面的「從貼圖庫選」)', type: 'image', v: it.src || '', size: 1000 },
+    { k: 'time', label: '時間', v: it.time },
+    { k: 'read', label: '已讀文字(只有自己的訊息會顯示;群組可寫「已讀 46」,空白 = 未讀)', v: it.read }
+  ], [
+    { label: '儲存', cls: 'pri', fn: v => { Object.assign(it, { who: v.who, kind: v.kind, text: v.text, src: v.src, time: v.time.trim(), read: v.read.trim() }); done(); } },
+    { label: '從貼圖庫選', fn: v => { pickSticker().then(s => { if (!s) return; Object.assign(it, { who: v.who, kind: 'sticker', src: s.src || '', text: s.text || '', time: v.time.trim(), read: v.read.trim() }); done(); }); } },
+    ...common
+  ]);
+}
+
+function send(asOther) {
+  const t = $('inp').value; if (!t.trim() || !cur) return;
+  let who = asWho;
+  if (asOther) who = who === 'me' ? cur.members[0].id : 'me';
+  const m = msg(who, t.replace(/\s+$/, ''), nowTime()); if (who === 'me') m.read = readText(cur);
+  cur.items.push(m);
+  $('inp').value = ''; autosize(); updSend();
+  save(); renderRoom(true);
+}
+function addMsg(kind, src, text) {
+  if (!cur) return;
+  const m = msg(asWho, text || '', nowTime(), { kind, src: src || '' }); if (asWho === 'me') m.read = readText(cur);
+  cur.items.push(m);
+  save(); renderRoom(true);
+}
+function updAs() {
+  const on = cur && asWho !== 'me';
+  $('asbar').classList.toggle('hidden', !on);
+  if (on) $('asText').textContent = '目前用「' + memberOf(cur, asWho).name + '」的身分傳訊息';
+}
+
+// 「＋」:編輯工具
+function tools() {
+  if (!cur) return;
+  const c = cur;
+  const btns = [];
+  if (asWho !== 'me') btns.push({ label: '↺ 改回用自己的身分傳訊息', fn: () => { asWho = 'me'; updAs(); } });
+  c.members.forEach(m => { if (asWho !== m.id) btns.push({ label: '⇄ 用「' + m.name + '」的身分傳訊息', fn: () => { asWho = m.id; updAs(); } }); });
+  btns.push(
+    { label: '📝 批次新增對話', fn: () => batchAdd(c.items.length) },
+    { label: '😆 傳貼圖(貼圖庫)', fn: () => pickSticker().then(s => { if (s) addMsg('sticker', s.src, s.text); }) },
+    { label: '✂ 從截圖剪貼圖 / 頭像', fn: () => openCrop('sticker') },
+    { label: '📅 加一個日期分隔', fn: () => { const d = chip('今天'); c.items.push(d); save(); renderRoom(true); editItem(d.id); } },
+    { label: '✎ 編輯聊天(名稱、公告、大頭貼…)', fn: () => editChat(c.id) },
+    { label: '👥 成員 / 對方', fn: () => editMembers(c) },
+    { label: '🖼 聊天背景圖片', fn: async () => { const s = await pickImage(1400); if (s) { c.bg = s; save(); renderRoom(false); } } },
+    { label: c.bg ? '🖼 移除背景圖片(恢復藍色)' : '', fn: () => { c.bg = ''; save(); renderRoom(false); } },
+    { label: '🗑 清空這個聊天的所有訊息', cls: 'dan', fn: () => { if (!confirm('清空所有訊息?')) return false; c.items = []; save(); renderRoom(true); } }
+  );
+  sheet('編輯工具', null, btns.filter(b => b.label), '點任何一則訊息可以修改;長按送出鍵 = 用對方的身分送出。');
+}
+
+// 長按標題:管理(只有自己知道)
+function adminMenu() {
+  sheet('管理', null, [
+    { label: S.locked ? '🔓 解除鎖定(點訊息可以編輯)' : '🔒 鎖定(給朋友看時用,點訊息、＋不會跳出編輯)', fn: () => { S.locked = !S.locked; save(); toast(S.locked ? '已鎖定' : '已解除鎖定'); } },
+    { label: '📝 批次新增對話', fn: () => batchAdd(cur.items.length) },
+    { label: '🧰 編輯工具', fn: tools },
+    { label: '✂ 從截圖剪貼圖 / 頭像', fn: () => openCrop('sticker') },
+    { label: '😆 貼圖庫(點一張就傳送)', fn: () => pickSticker().then(s => { if (s) addMsg('sticker', s.src, s.text); }) },
+    { label: '💬 切換聊天 / 所有聊天', fn: openHome },
+    { label: '⇩ 匯入 LINE 聊天記錄到這個聊天', fn: async () => { const t = await pickText(); if (t) importLineText(t, cur); } },
+    { label: '⚙ 設定', fn: settings },
+    { label: '🗑 清空所有聊天的對話', cls: 'dan', fn: () => {
+      if (!confirm('所有聊天的訊息都會刪掉(聊天、大頭貼、貼圖庫會保留),確定?')) return false;
+      S.chats.forEach(c => { c.items = []; }); save(); renderRoom(true);
+    } }
+  ], '長按上方名字可以打開這裡。打開 App 會直接進入上次的聊天;按左上「<」或返回鍵會打開 LINE。');
+}
+
+function autosize() { const t = $('inp'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 96) + 'px'; }
+function updSend() { $('btnSend').innerHTML = $('inp').value.trim() ? SEND : MIC; }
+
+// ================= 批次新增對話 =================
+// 一行一則:「我: 內容」「對方: 內容」「成員名字: 內容」,前面可加時間「09:52 我: 內容」;
+// 「--- 7月4日 週六」= 日期;沒有「名字:」的行接在上一則後面(多行訊息)
+function addMinutes(t, n) {
+  const m = t.match(/^(\d{1,2}):(\d{2})$/); if (!m) return t;
+  const x = (+m[1] * 60 + +m[2] + n) % 1440;
+  return pad(Math.floor(x / 60)) + ':' + pad(x % 60);
+}
+function parseBatch(c, text, startTime) {
+  const out = [], newMembers = [];
+  let t = startTime || nowTime(), last = null;
+  const known = n => {
+    if (n === '我' || n === S.me.name) return 'me';
+    if (n === '對方' || n === c.name) return c.members[0].id;
+    const m = c.members.find(x => x.name === n) || newMembers.find(x => x.name === n);
+    return m ? m.id : null;
+  };
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const ln = raw.trim();
+    if (!ln) { last = null; continue; }
+    const dm = ln.match(/^-{2,}\s*(.*)$/);
+    if (dm) { out.push(chip(dm[1].trim() || '今天')); last = null; continue; }
+    let rest = ln, time = null;
+    const tm = rest.match(/^(\d{1,2}:\d{2})\s+(.*)$/);
+    if (tm) { time = to24(tm[1]); rest = tm[2]; }
+    const sm = rest.match(/^([^:：]{1,20})[:：]\s*(.*)$/);
+    let who = sm ? known(sm[1].trim()) : null;
+    if (sm && !who && c.group && !/\s/.test(sm[1].trim())) {       // 群組裡新名字 = 新成員
+      const m = { id: nid(), name: sm[1].trim(), avatar: '' }; newMembers.push(m); who = m.id;
+    }
+    if (!who) {
+      if (last && last.kind === 'text') { last.text += '\n' + ln; continue; }
+      who = 'me'; rest = ln;
+    } else rest = sm[2];
+    t = time || addMinutes(t, Math.floor(Math.random() * 3));
+    const m = msg(who, rest, t);
+    if (who === 'me') m.read = readText(c);
+    const st = rest.match(/^\[貼圖(?:[:：]\s*(\d+))?\]$/);
+    if (st) {
+      m.kind = 'sticker'; m.text = '😆';
+      const s = st[1] && S.stickers[+st[1] - 1];
+      if (s) { m.src = s.src; m.text = ''; }
+    } else if (/^\[(照片|圖片)\]$/.test(rest)) { m.kind = 'image'; m.text = ''; }
+    else if (/^☎/.test(rest)) { m.kind = 'call'; m.text = rest.replace(/^☎\s*/, ''); }
+    out.push(m); last = m;
+  }
+  return { items: out, newMembers };
+}
+function batchAdd(at) {
+  const c = cur; if (!c) return;
+  const names = c.members.map(m => m.name);
+  sheet('批次新增對話', [
+    { k: 'text', type: 'big', label: '一行一則訊息', v: '',
+      ph: '--- 今天\n09:52 對方: 老闆 今天會過來嗎?\n我: 抱歉，我7號禮拜二回高雄再過去\n對方: [貼圖]\n我: 好啦好啦' },
+    { k: 'start', label: '開始時間(沒寫時間的訊息會從這裡往後自動加 0~2 分鐘)', v: lastTime(c, at - 1) || nowTime() }
+  ], [
+    { label: '加入', cls: 'pri', fn: v => {
+      const r = parseBatch(c, v.text, v.start.trim());
+      if (!r.items.length) { toast('沒有內容'); return false; }
+      c.members.push(...r.newMembers);
+      c.items.splice(at, 0, ...r.items);
+      save(); renderRoom(at >= c.items.length - r.items.length);
+      toast('已加入 ' + r.items.filter(x => x.t === 'msg').length + ' 則');
+    } }
+  ], `寫法:<code>我: 內容</code> = 右邊綠色;<code>對方: 內容</code> 或 <code>${esc(names.join('、'))}: 內容</code> = 左邊。
+    前面可加時間 <code>09:52 我: …</code>;<code>--- 7月4日 週六</code> = 日期;
+    <code>[貼圖]</code> 表情貼圖、<code>[貼圖:2]</code> 貼圖庫第 2 張、<code>[照片]</code>、<code>☎ 通話時間 3:59</code>;
+    沒有「名字:」的行接在上一則後面(多行訊息)。${c.group ? '群組裡寫新的名字會自動加成新成員。' : ''}`);
+}
+
+// ================= 貼圖庫 =================
+function pickSticker() {
+  return new Promise(resolve => {
+    let doneFlag = false;
+    const finish = v => { if (!doneFlag) { doneFlag = true; resolve(v); } };
+    const grid = S.stickers.map((s, i) => `<div data-s="${i}"><span>${i + 1}</span><img src="${s.src}"></div>`).join('');
+    const { sh, close } = panel(`<h3>貼圖庫</h3>
+      ${grid ? `<div class="sgrid">${grid}</div>` : '<div class="hint">還沒有貼圖。用「從截圖剪下」把 LINE 截圖裡的貼圖存進來。</div>'}
+      <div class="btns menu">
+        <button class="btn" data-a="crop">✂ 從截圖剪下新貼圖</button>
+        <button class="btn" data-a="photo">🖼 從相簿加入(透明背景的 PNG 最好)</button>
+        <button class="btn" data-a="emoji">😆 用表情符號當貼圖</button>
+      </div>
+      <div class="hint">點貼圖 = 使用;長按 = 刪除。批次新增時寫 <code>[貼圖:編號]</code>。</div>`);
+    sh.querySelectorAll('[data-s]').forEach(el => onLong(el, () => {
+      if (!confirm('從貼圖庫刪除第 ' + (+el.dataset.s + 1) + ' 張?')) return;
+      S.stickers.splice(+el.dataset.s, 1); save(); close(); finish(null); pickSticker();
+    }, () => { close(); finish(S.stickers[+el.dataset.s]); }));
+    sh.querySelector('[data-a=crop]').onclick = () => { close(); finish(null); openCrop('sticker'); };
+    sh.querySelector('[data-a=photo]').onclick = async () => {
+      const src = await pickImage(360, true); if (!src) return;
+      const s = { id: nid(), src }; S.stickers.push(s); save(); close(); finish(s);
+    };
+    sh.querySelector('[data-a=emoji]').onclick = () => {
+      const e = prompt('輸入一個表情符號', '😆'); if (!e) return; close(); finish({ text: e.trim() });
+    };
+  });
+}
+
+// ================= 從截圖剪下貼圖 / 頭像 =================
+const crop = { img: null, mode: 'sticker', scroll: false, rect: null, k: 1 };
+async function openCrop(mode) {
+  const img = await loadImage(await pickFile('image/*'));
+  if (!img) return;
+  // 長截圖太長時縮小(手機記憶體)
+  const k = Math.min(1, 16000 / img.height, 1440 / img.width);
+  const cv = $('cCanvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+  crop.img = cv; crop.rect = null; $('cRect').classList.add('hidden');
+  $('crop').classList.remove('hidden');
+  setCropMode(mode); setCropScroll(false);
+  $('cBody').scrollTop = cv.height / (cv.width / $('cBody').clientWidth) - $('cBody').clientHeight;   // 先看最下面(最新的訊息)
+}
+function closeCrop() { $('crop').classList.add('hidden'); crop.img = null; const cv = $('cCanvas'); cv.width = cv.height = 1; }
+function setCropMode(m) {
+  crop.mode = m;
+  $('cModeStk').classList.toggle('on', m === 'sticker'); $('cModeAv').classList.toggle('on', m === 'avatar');
+  $('cRect').classList.toggle('round', m === 'avatar');
+  updCropTip();
+}
+function setCropScroll(on) { crop.scroll = on; $('cScroll').classList.toggle('on', on); $('cBody').classList.toggle('sel', !on); updCropTip(); }
+function updCropTip() {
+  $('cTip').textContent = crop.scroll ? '捲動模式:上下滑動找位置,找到後再按「✋ 捲動」切回框選。'
+    : crop.mode === 'sticker' ? '用手指拉一個框把貼圖框起來 → 按「剪下」,藍色背景會自動去掉。' : '用手指把圓形大頭貼框起來 → 按「剪下」,選擇是誰的大頭貼。';
+}
+(function cropDrag() {
+  const body = $('cBody'), rect = $('cRect');
+  let sx = 0, sy = 0, drag = false;
+  const pos = e => { const b = $('cCanvas').getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+  body.addEventListener('pointerdown', e => { if (crop.scroll) return; drag = true; [sx, sy] = pos(e); body.setPointerCapture(e.pointerId); });
+  body.addEventListener('pointermove', e => {
+    if (!drag) return;
+    let [x, y] = pos(e); let w = Math.abs(x - sx), h = Math.abs(y - sy);
+    if (crop.mode === 'avatar') { w = h = Math.max(w, h); x = x < sx ? sx - w : sx + w; y = y < sy ? sy - h : sy + h; }
+    const r = { x: Math.min(sx, x), y: Math.min(sy, y), w, h };
+    crop.rect = r;
+    const cb = $('cCanvas').getBoundingClientRect(), bb = body.getBoundingClientRect();
+    rect.style.left = (r.x + cb.left - bb.left) + 'px'; rect.style.top = (r.y + cb.top - bb.top + body.scrollTop) + 'px';
+    rect.style.width = r.w + 'px'; rect.style.height = r.h + 'px';
+    rect.classList.toggle('hidden', w < 4);
+  });
+  const end = () => { drag = false; };
+  body.addEventListener('pointerup', end); body.addEventListener('pointercancel', end);
+})();
+function cropDone() {
+  const r = crop.rect; if (!r || r.w < 8) { toast('先用手指拉一個框'); return; }
+  const cv = $('cCanvas'), k = cv.width / cv.getBoundingClientRect().width;
+  const x = Math.max(0, Math.round(r.x * k)), y = Math.max(0, Math.round(r.y * k));
+  const w = Math.min(cv.width - x, Math.round(r.w * k)), h = Math.min(cv.height - y, Math.round(r.h * k));
+  if (crop.mode === 'avatar') {
+    const src = scaled(cv, 240, false, x, y, w, h);
+    const c = cur; const opts = [['chat', '聊天的大頭貼(' + c.name + ')'], ...c.members.map(m => ['m:' + m.id, m.name]), ['me', '我自己']];
+    sheet('這是誰的大頭貼?', [{ k: 'who', label: '套用到', type: 'select', opts, v: c.group ? 'm:' + c.members[0].id : 'chat' }], [
+      { label: '套用', cls: 'pri', fn: v => {
+        if (v.who === 'chat') c.avatar = src; else if (v.who === 'me') S.me.avatar = src;
+        else memberOf(c, v.who.slice(2)).avatar = src;
+        save(); renderRoom(false); toast('已套用,可以繼續剪下一個');
+      } }
+    ], `<div class="checker" style="margin-top:8px"><img src="${src}" style="border-radius:50%"></div>`);
+    return;
+  }
+  const keepBg = { v: false };
+  const show = () => {
+    const src = cutSticker(cv, x, y, w, h, !keepBg.v);
+    const close = sheet('剪下的貼圖', null, [
+      { label: '存到貼圖庫', cls: 'pri', fn: () => { S.stickers.push({ id: nid(), src }); save(); toast('已存成第 ' + S.stickers.length + ' 張,可以繼續剪'); } },
+      { label: '存起來並馬上傳送', fn: () => { const s = { id: nid(), src }; S.stickers.push(s); save(); closeCrop(); addMsg('sticker', src); } },
+      { label: keepBg.v ? '改成去背景' : '不要去背景', fn: () => { keepBg.v = !keepBg.v; setTimeout(show, 0); } }
+    ], `<div class="checker">${'<img src="' + src + '">'}</div>`);
+    return close;
+  };
+  show();
+}
+// 去背景:從框的四邊開始,把和邊緣顏色(藍色、雲)相近、連在一起的像素變透明;再裁掉四周空白
+function cutSticker(cv, x, y, w, h, removeBg) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.drawImage(cv, x, y, w, h, 0, 0, w, h);
+  if (!removeBg) return scaledCanvas(c, 360);
+  const im = g.getImageData(0, 0, w, h), d = im.data;
+  // 邊緣顏色表(每色 8 階量化)
+  const pal = new Map();
+  const addPal = i => { const key = (d[i] >> 3) << 10 | (d[i + 1] >> 3) << 5 | (d[i + 2] >> 3); pal.set(key, (pal.get(key) || 0) + 1); };
+  for (let i = 0; i < w; i++) { addPal(i * 4); addPal(((h - 1) * w + i) * 4); }
+  for (let j = 0; j < h; j++) { addPal(j * w * 4); addPal((j * w + w - 1) * 4); }
+  const colors = [...pal.entries()].filter(e => e[1] >= 2).map(e => [(e[0] >> 10 & 31) * 8 + 4, (e[0] >> 5 & 31) * 8 + 4, (e[0] & 31) * 8 + 4]);
+  const T = 30 * 30;
+  const dist = i => { let best = 1e9; for (const p of colors) { const a = d[i] - p[0], b = d[i + 1] - p[1], e = d[i + 2] - p[2]; const s = a * a + b * b + e * e; if (s < best) { best = s; if (s < 50) break; } } return best; };
+  const bg = new Uint8Array(w * h), q = [];
+  const tryPush = p => { if (!bg[p] && dist(p * 4) < T) { bg[p] = 1; q.push(p); } };
+  for (let i = 0; i < w; i++) { tryPush(i); tryPush((h - 1) * w + i); }
+  for (let j = 0; j < h; j++) { tryPush(j * w); tryPush(j * w + w - 1); }
+  while (q.length) {
+    const p = q.pop(), px = p % w, py = (p - px) / w;
+    if (px > 0) tryPush(p - 1); if (px < w - 1) tryPush(p + 1);
+    if (py > 0) tryPush(p - w); if (py < h - 1) tryPush(p + w);
+  }
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let p = 0; p < w * h; p++) {
+    const px = p % w, py = (p - px) / w;
+    if (bg[p]) { d[p * 4 + 3] = 0; continue; }
+    // 貼著背景的邊緣像素:顏色越接近背景越透明,邊緣比較不會有藍邊
+    const edge = (px > 0 && bg[p - 1]) || (px < w - 1 && bg[p + 1]) || (py > 0 && bg[p - w]) || (py < h - 1 && bg[p + w]);
+    if (edge) { const s = Math.sqrt(dist(p * 4)); d[p * 4 + 3] = Math.max(60, Math.min(255, Math.round((s - 30) / 40 * 255))); }
+    if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+  }
+  g.putImageData(im, 0, 0);
+  if (x1 < 0) return scaledCanvas(c, 360);
+  const out = document.createElement('canvas'); out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(c, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return scaledCanvas(out, 360);
+}
+function scaledCanvas(c, max) { return scaled(c, max, true); }
+
+// ================= 所有聊天(管理) =================
+function openHome() { $('home').classList.remove('hidden'); renderList(); setBars('#ffffff'); }
+function closeHome() { $('home').classList.add('hidden'); renderRoom(false); }
+function previewOf(c) {
+  const m = [...c.items].reverse().find(x => x.t === 'msg');
+  if (!m) return '';
+  if (m.kind === 'sticker') return '貼圖'; if (m.kind === 'image') return '照片';
+  return m.text;
+}
+function renderList() {
+  const q = $('q').value.trim().toLowerCase();
+  const shown = S.chats.filter(c => !q || c.name.toLowerCase().includes(q));
+  $('list').innerHTML = shown.map(c => `
+    <div class="row ${c.id === S.current ? 'cur' : ''}" data-id="${c.id}">
+      ${avatarHtml(c.name, c.avatar)}
+      <div class="mid"><div class="name">${esc(c.name)}${c.count ? ' (' + esc(c.count) + ')' : ''}</div><div class="prev">${esc(previewOf(c))}</div></div>
+      <div class="time">${esc(lastTime(c))}</div>
+    </div>`).join('') || `<div class="empty">還沒有聊天,按右上角「＋」新增</div>`;
+  $('list').querySelectorAll('.row').forEach(r => onLong(r, () => editChat(r.dataset.id), () => openRoom(r.dataset.id)));
+}
+
+function editChat(id) {
+  const c = S.chats.find(x => x.id === id); if (!c) return;
+  const f = c.members[0] || { id: 'f', name: c.name, avatar: '' };
+  const after = () => { if (!$('home').classList.contains('hidden')) renderList(); if (cur === c) renderRoom(false); };
+  sheet('編輯聊天:' + c.name, [
+    { k: 'name', label: '名稱', v: c.name },
+    { k: 'avatar', label: '大頭貼', type: 'image', v: c.avatar, size: 240 },
+    { k: 'count', label: '人數(群組名稱後面的數字,空白不顯示)', v: c.count },
+    { k: 'announce', label: '上方公告(空白不顯示)', v: c.announce },
+    { k: 'group', label: '群組(對方訊息上方顯示名字)', type: 'check', v: c.group }
+  ], [
+    { label: '儲存', cls: 'pri', fn: v => {
+      const oldName = c.name;
+      Object.assign(c, { name: v.name.trim() || c.name, avatar: v.avatar, count: v.count.trim(), announce: v.announce, group: v.group });
+      if (!c.group && c.members.length === 1 && f.name === oldName) f.name = c.name;
+      save(); after();
+    } },
+    { label: '成員 / 對方', fn: () => { editMembers(c); } },
+    { label: '刪除聊天', cls: 'dan', fn: () => {
+      if (S.chats.length <= 1) { toast('至少要留一個聊天'); return false; }
+      if (!confirm('刪除「' + c.name + '」?')) return false;
+      S.chats = S.chats.filter(x => x !== c);
+      if (cur === c) openRoom(S.chats[0].id);
+      save(); after();
+    } }
+  ]);
+}
+
+function editMembers(c) {
+  const btns = c.members.map(m => ({ label: '✎ ' + m.name, fn: () => editMember(c, m) }));
+  btns.push({ label: '＋ 新增成員(群組用)', fn: () => {
+    const m = { id: nid(), name: '新成員', avatar: '' }; c.members.push(m); c.group = true; save(); editMember(c, m);
+  } });
+  sheet('成員 / 對方', null, btns, '一對一聊天只有一位「對方」;群組可以有很多位。大頭貼也可以用「從截圖剪下 → 頭像」。');
+}
+function editMember(c, m) {
+  const after = () => { if (cur === c) renderRoom(false); };
+  sheet('編輯成員', [
+    { k: 'name', label: '名字', v: m.name },
+    { k: 'avatar', label: '大頭貼(空白 = 用聊天的大頭貼)', type: 'image', v: m.avatar, size: 240 }
+  ], [
+    { label: '儲存', cls: 'pri', fn: v => { m.name = v.name.trim() || m.name; m.avatar = v.avatar; save(); after(); } },
+    { label: '刪除這位成員', cls: 'dan', fn: () => {
+      if (c.members.length <= 1) { toast('至少要留一位'); return false; }
+      if (c.items.some(x => x.who === m.id) && !confirm('這位成員的訊息會改成第一位成員的,確定?')) return false;
+      c.members = c.members.filter(x => x !== m);
+      c.items.forEach(x => { if (x.who === m.id) x.who = c.members[0].id; });
+      save(); after();
+    } }
+  ]);
+}
+
+function addMenu() {
+  sheet('新增', null, [
+    { label: '＋ 新增一對一聊天', fn: () => newChat(false) },
+    { label: '＋ 新增群組', fn: () => newChat(true) },
+    { label: '⇩ 匯入 LINE 聊天記錄(.txt)', fn: async () => { const t = await pickText(); if (t) importLineText(t); } }
+  ], 'LINE 匯入方法:在 LINE 打開那個聊天 → 右上角 ≡ → 其他設定 → 傳送聊天記錄 → 選「看護陳姐」。');
+}
+function newChat(group) {
+  sheet(group ? '新增群組' : '新增聊天', [{ k: 'name', label: group ? '群組名稱' : '對方名字', v: '' }], [
+    { label: '建立', cls: 'pri', fn: v => {
+      const name = v.name.trim(); if (!name) { toast('請輸入名字'); return false; }
+      const c = chat(name, { group, members: [{ id: 'f', name: group ? '朋友' : name, avatar: '' }], items: [chip('今天')] });
+      S.chats.unshift(c); save(); openRoom(c.id);
+    } }
+  ]);
+}
+function settings() {
+  sheet('設定', [
+    { k: 'name', label: '我的名字(匯入 LINE 記錄、批次新增時用來認出自己)', v: S.me.name }
+  ], [
+    { label: '儲存', cls: 'pri', fn: v => { S.me.name = v.name.trim() || '我'; save(); } },
+    { label: '恢復範例內容', cls: 'dan', fn: () => { if (!confirm('全部聊天和貼圖庫會被換回範例,確定?')) return false; S = sample(); save(); openRoom(S.current); } }
+  ]);
+}
+
+// ================= 匯入 LINE 聊天記錄 =================
+// 支援 LINE「傳送聊天記錄」的文字檔(新舊格式、24 / 12 小時制、多行訊息)
+function to24(s) {
+  const m = s.trim().match(/^(上午|下午|AM|PM)?\s*(\d{1,2}):(\d{2})\s*(AM|PM)?$/i); if (!m) return null;
+  let h = +m[2]; const ap = (m[1] || m[4] || '').toUpperCase();
+  if ((ap === '下午' || ap === 'PM') && h < 12) h += 12;
+  if ((ap === '上午' || ap === 'AM') && h === 12) h = 0;
+  return pad(h) + ':' + m[3];
+}
+function parseLine(txt) {
+  const lines = txt.replace(/^﻿/, '').replace(/\r\n?/g, '\n').split('\n');
+  let title = '', items = [], names = [], last = null, quote = false;
+  const reDate = /^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})(?:\s*[（(]?[^\t]{0,8}?[)）]?)?\s*$/;
+  // 引號包住的多行訊息裡,遇到新的日期或訊息就當作引號結束(避免單獨一個 " 吃掉後面全部)
+  const isLineStart = ln => reDate.test(ln) || (ln.includes('\t') && !!to24(ln.split('\t')[0]));
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (quote && last && !isLineStart(ln)) { last.text += '\n' + ln; if (/"\s*$/.test(ln)) { quote = false; last.text = last.text.replace(/^"/, '').replace(/"\s*$/, ''); } continue; }
+    if (i < 4 && !items.length) {
+      const m = ln.match(/^\[LINE\]\s*與(.+?)的聊天記錄/) || ln.match(/^\[LINE\]\s*(.+?)的聊天記錄/) || ln.match(/^\[LINE\]\s*Chat history (?:with|in) (.+)$/i);
+      if (m) { title = m[1].trim(); continue; }
+      if (/^(儲存日期|Saved on|保存日期)/i.test(ln)) continue;
+    }
+    quote = false;
+    if (!ln.trim()) { if (last) last.blank = (last.blank || 0) + 1; continue; }
+    const dm = ln.match(reDate);
+    if (dm) { items.push(chip(dateChip(new Date(+dm[1], +dm[2] - 1, +dm[3])))); last = null; continue; }
+    let time = null, name = null, text = null;
+    const p = ln.split('\t');
+    if (p.length >= 2 && (time = to24(p[0]))) {
+      if (p.length >= 3) { name = p[1].trim(); text = p.slice(2).join('\t'); } else text = p[1];
+    } else {
+      const m = ln.match(/^((?:上午|下午)?\d{1,2}:\d{2}(?:\s?[AP]M)?)\s+(\S+)\s+(.+)$/i);
+      if (m && (time = to24(m[1]))) { name = m[2]; text = m[3]; }
+    }
+    if (time) {
+      if (!name) { items.push(chip(text.trim())); last = null; continue; }   // 系統訊息(收回、加入群組…)
+      if (!names.includes(name)) names.push(name);
+      last = { id: nid(), t: 'msg', name, time, text, kind: 'text', read: '' };
+      items.push(last);
+      if (/^"/.test(text) && !/^".*"\s*$/.test(text)) quote = true;
+      else if (/^".*"$/.test(text) && text.length > 1) last.text = text.slice(1, -1);
+      continue;
+    }
+    if (last) last.text += '\n'.repeat((last.blank || 0) + 1) + ln;   // 沒有時間的行 = 上一則訊息的下一行
+    if (last) last.blank = 0;
+  }
+  items.forEach(it => {
+    if (it.t !== 'msg') return;
+    delete it.blank;
+    const t = it.text.trim();
+    if (/^\[(貼圖|Sticker|スタンプ)\]$/i.test(t)) { it.kind = 'sticker'; it.text = '😆'; }
+    else if (/^\[(照片|圖片|Photo|写真)\]$/i.test(t)) { it.kind = 'image'; it.text = ''; }
+    else if (/^☎/.test(t)) { it.kind = 'call'; it.text = t.replace(/^☎\s*/, ''); }
+  });
+  return { title, items, names };
+}
+
+function importLineText(txt, target) {
+  const r = parseLine(String(txt || ''));
+  const msgs = r.items.filter(x => x.t === 'msg');
+  if (!msgs.length) { toast('看不懂這個檔案,請用 LINE 的「傳送聊天記錄」產生的 .txt'); return; }
+  const finish = myName => {
+    const group = r.names.filter(n => n !== myName).length > 1;
+    const title = (target && target.name) || r.title || r.names.find(n => n !== myName) || '匯入的聊天';
+    const items = r.items.slice(-600);   // 太多訊息手機會變慢,留最後 600 則
+    let c = target || S.chats.find(x => x.name === title);
+    if (c && !target && !confirm('已經有「' + title + '」,要用匯入的內容取代它的訊息嗎?(按取消會另外建立一個)')) c = null;
+    if (!c) { c = chat(title, { group }); c.members = []; S.chats.unshift(c); }
+    c.group = c.group || group;
+    const byName = {};
+    c.members.forEach(m => byName[m.name] = m.id);
+    let claimed = false;   // 一對一:匯入的對方就是原本的「對方」(保留大頭貼)
+    items.forEach(it => {
+      if (it.t !== 'msg') return;
+      if (it.name === myName) { it.who = 'me'; it.read = readText(c); }
+      else {
+        if (!byName[it.name]) {
+          if (!claimed && !c.group && c.members.length === 1) { c.members[0].name = it.name; byName[it.name] = c.members[0].id; }
+          else { const m = { id: c.members.length ? nid() : 'f', name: it.name, avatar: '' }; c.members.push(m); byName[it.name] = m.id; }
+        }
+        it.who = byName[it.name];
+        if (it.who === c.members[0].id) claimed = true;
+      }
+      delete it.name;
+    });
+    if (!c.members.length) c.members.push({ id: 'f', name: title, avatar: '' });
+    c.items = items;
+    if (myName !== '__nobody__') S.me.name = myName;
+    save(); openRoom(c.id);
+    toast('已匯入 ' + items.filter(x => x.t === 'msg').length + ' 則訊息');
+  };
+  if (r.names.includes(S.me.name)) return finish(S.me.name);
+  if (r.names.length === 2 && r.title && r.names.includes(r.title)) return finish(r.names.find(n => n !== r.title));
+  if (r.names.length === 1 && r.title && r.names[0] === r.title) return finish('__nobody__');
+  sheet('哪一個是你?', null, [...r.names.map(n => ({ label: n, fn: () => finish(n) })), { label: '都不是(全部放左邊)', fn: () => finish('__nobody__') }],
+    '你的訊息會放在右邊(綠色),其他人放左邊。');
+}
+
+// ================= Android 返回鍵 =================
+// 回傳 true = App 自己處理了;false = 交給 Android(打開 LINE)
+window.appBack = function () {
+  if (sheetStack.length) { sheetStack[sheetStack.length - 1](); return true; }
+  if (!$('crop').classList.contains('hidden')) { closeCrop(); return true; }
+  if (!$('home').classList.contains('hidden')) { closeHome(); return true; }
+  return false;
+};
+// importLineText 是全域函式,Android 收到分享時直接呼叫 window.importLineText(文字)
+
+// ================= 開始 =================
+load();
+$('btnBack').onclick = leave;
+onLong($('roomTitle'), adminMenu, () => { if (!S.locked) editChat(cur.id); });
+$('btnMenu').onclick = () => { if (!S.locked) tools(); };
+$('btnTools').onclick = () => { if (!S.locked) tools(); };
+$('btnPic').onclick = () => { if (!S.locked) pickImage(1000).then(s => { if (s) addMsg('image', s); }); };
+$('btnCam').onclick = $('btnPic').onclick;
+$('announce').onclick = () => { if (!S.locked && cur) editChat(cur.id); };
+$('asOff').onclick = () => { asWho = 'me'; updAs(); };
+$('inp').addEventListener('input', () => { autosize(); updSend(); });
+$('btnSend').addEventListener('mousedown', e => e.preventDefault());   // 按送出時鍵盤不要收起來
+onLong($('btnSend'), () => send(true), () => send(false));
+$('btnEmo').onclick = () => { const t = $('inp'); t.value += '😂'; autosize(); updSend(); };
+$('msgs').addEventListener('scroll', onMsgsScroll, { passive: true });
+$('btnDown').onclick = () => { const b = $('msgs'); progScroll = Date.now(); b.scrollTo({ top: b.scrollHeight, behavior: 'smooth' }); };
+$('homeBack').onclick = closeHome;
+$('btnAdd').onclick = addMenu;
+$('q').addEventListener('input', renderList);
+$('cClose').onclick = closeCrop;
+$('cModeStk').onclick = () => setCropMode('sticker');
+$('cModeAv').onclick = () => setCropMode('avatar');
+$('cScroll').onclick = () => setCropScroll(!crop.scroll);
+$('cDone').onclick = cropDone;
+updSend();
+openRoom(S.current);
+</script>
+</body>
+</html>
