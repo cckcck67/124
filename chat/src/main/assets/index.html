@@ -202,6 +202,23 @@ svg { display: block; }
 
 <script>
 'use strict';
+/*
+ * 整人聊天(看護陳姐):偽裝成 LINE 好友捷徑的聊天室,說明見 docs/chat.md
+ *
+ * 資料 S(存在 Android 的 chats.json;電腦瀏覽器測試時存 localStorage):
+ *   ver        資料版本(DATA_VER),舊資料在 load() 升級
+ *   me         { name, avatar }  自己
+ *   current    打開 App 時進入的聊天 id
+ *   locked     鎖定時點訊息、＋ 不會跳出編輯
+ *   stickers   貼圖庫 [{ id, src }](批次新增 [貼圖:n] 的 n 從 1 開始)
+ *   chats      [{ id, name, avatar, count, announce, bg, group,
+ *                 members: [{ id, name, avatar }],     左邊的人(一對一只有一位,id 'f')
+ *                 items: [{ t:'date', text } |       日期 / 置中文字
+ *                         { t:'msg', who:'me'|成員id, kind:'text'|'sticker'|'image'|'call', text, src, time, read }] }]
+ *
+ * 和 Android 的介面(window.Android):load() / save(json) / setBars(顏色) / openLine()
+ * Android 呼叫這頁:appBack()(返回鍵)、importLineText(文字)(LINE 分享過來的聊天記錄)
+ */
 // ================= 資料 =================
 const SAVE_KEY = 'prankchat';
 const WEEK = '日一二三四五六';
@@ -859,7 +876,7 @@ function addMenu() {
     { label: '＋ 新增一對一聊天', fn: () => newChat(false) },
     { label: '＋ 新增群組', fn: () => newChat(true) },
     { label: '⇩ 匯入 LINE 聊天記錄(.txt)', fn: async () => { const t = await pickText(); if (t) importLineText(t); } }
-  ], 'LINE 匯入方法:在 LINE 打開那個聊天 → 右上角 ≡ → 其他設定 → 傳送聊天記錄 → 選這個 App。');
+  ], 'LINE 匯入方法:在 LINE 打開那個聊天 → 右上角 ≡ → 其他設定 → 傳送聊天記錄 → 選「看護陳姐」。');
 }
 function newChat(group) {
   sheet(group ? '新增群組' : '新增聊天', [{ k: 'name', label: group ? '群組名稱' : '對方名字', v: '' }], [

@@ -12,6 +12,8 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!-- singleTask:從分享或桌面再打開都回到同一個畫面;excludeFromRecents:多工畫面看不到;
+             adjustResize:鍵盤出現時輸入框往上推 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
