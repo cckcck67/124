@@ -25,6 +25,12 @@
   #title { position: fixed; left: 0; right: 0; top: 3vh; text-align: center; font-size: 5vmin; z-index: 20;
            text-shadow: 0 0 1vh #000, 0 0 2vh #000; pointer-events: none; transition: opacity 2s; }
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.6s; z-index: 10; }
+  /* 凝視地面前進:畫面下方的箭頭 + 慢慢填滿的圓圈 */
+  #gaze { position: fixed; left: 50%; bottom: 14vh; width: 18vmin; height: 18vmin; margin-left: -9vmin; border-radius: 50%;
+          display: none; z-index: 8; pointer-events: none; align-items: center; justify-content: center;
+          background: conic-gradient(#ffd040 var(--p, 0%), rgba(255,255,255,0.25) 0); }
+  #gaze span { width: 14vmin; height: 14vmin; border-radius: 50%; background: rgba(0,0,0,0.65); color: #ffd040;
+               display: flex; align-items: center; justify-content: center; font-size: 9vmin; }
   #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 2147483647; display: none; padding: 2vmin; border-radius: 1.5vmin;
          background: rgba(80,20,20,0.92); color: #fff; font-size: 3.6vmin; text-align: center; pointer-events: none; }
   #pickBar, #ctl { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
@@ -61,6 +67,7 @@
   <button id="cNext">換角度</button>
   <button id="cFwd">前進</button>
   <button id="cAuto">自動散步</button>
+  <button id="cTurn">迴轉</button>
   <button id="cHome">回降落點</button>
   <button id="cLand">降落</button>
   <button id="cPick">地圖</button>
@@ -68,6 +75,7 @@
 </div>
 <div id="title"></div>
 <div id="fade"></div>
+<div id="gaze"><span id="gazeArrow">⬆</span></div>
 <div id="err"></div>
 <div id="menu">
   <h1>空中遊覽</h1>
@@ -100,6 +108,7 @@ var manual = false;               // 2D 時用手勢移動了地圖:自動飛行
 var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
 var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設面向
 var landPano = '';                // 降落時的街景點(回降落點用)
+var pendingFace = false;          // 降落後等路的資料出來,再決定要不要轉向
 var walkAuto = false, walkSec = 4, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
 var pickMap = null;
 
@@ -189,6 +198,7 @@ window.vrFlight = function (cmd) {
   if (landed) {   // 在地面上:散步指令
     if (cmd === 'fwd') { walkAuto = false; step(1); }
     else if (cmd === 'back') { walkAuto = false; step(-1); }
+    else if (cmd === 'turn') { turnAround(); }
     else if (cmd === 'auto') { walkAuto = !walkAuto; lastStep = performance.now(); flash(walkAuto ? '自動散步:每 ' + walkSec + ' 秒走一步' : '停下來'); }
     else if (cmd === 'faster') { walkSec = Math.max(2, walkSec - 1); flash('每 ' + walkSec + ' 秒走一步'); }
     else if (cmd === 'slower') { walkSec = Math.min(10, walkSec + 1); flash('每 ' + walkSec + ' 秒走一步'); }
@@ -262,6 +272,7 @@ function refreshCtl() {
   $('cAuto').style.display = landed ? '' : 'none';
   $('cAuto').textContent = walkAuto ? '停止' : '自動散步';
   $('cHome').style.display = landed ? '' : 'none';
+  $('cTurn').style.display = landed ? '' : 'none';
 }
 
 // ---------------- 目的地清單(內建 + 自己存的) ----------------
@@ -387,11 +398,12 @@ function fly(now) {
   if (landed) {
     // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
     if (pano && vr) pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: Math.max(-80, Math.min(80, lookPitch)) });
-    // 自動散步:時間到就往臉朝的方向走一步
+    // 自動散步:時間到就沿著路往前走一步(照身體正前方,不是照頭,轉頭看風景不會走歪)
     if (walkAuto && now - lastStep > walkSec * 1000) {
       lastStep = now;
       if (!step(1)) { walkAuto = false; refreshCtl(); }
     }
+    gazeStep(dt);
     return;
   }
   if (manual) return;   // 手勢控制中,不要蓋掉
@@ -488,6 +500,14 @@ function land() {
         }
         pano.setPano(data.location.pano);
         landPano = data.location.pano;
+        // 街景的路(links)載入後,正前方沒有路就轉向最近的路
+        if (!pano.__faceRoad) {
+          pano.__faceRoad = true;
+          pano.addListener('links_changed', function () {
+            if (pendingFace) { pendingFace = false; faceRoad(); }
+          });
+        }
+        pendingFace = true;
         walkAuto = false;
         pano.setPov({ heading: panoBase, pitch: 0 });
         pano.setVisible(true);
@@ -517,18 +537,84 @@ function viewHeading() {
 
 function angleDiff(a, b) { var d = Math.abs(((a - b) % 360 + 360) % 360); return d > 180 ? 360 - d : d; }
 
-// dir = 1 往前、-1 往後:沿著街景的路,選最接近那個方向的下一個點;沒有路回傳 false
-function step(dir) {
-  if (!pano || !pano.getLinks) return false;
-  var want = (viewHeading() + (dir < 0 ? 180 : 0)) % 360;
+// 身體正前方的方向(度):VR = 置中時的正前方(不含轉頭);2D = 目前看的方向
+function bodyHeading() { return vr ? panoBase : viewHeading(); }
+
+// 找最接近某個方向的路(在 maxDiff 度以內),沒有回傳 null
+function linkToward(heading, maxDiff) {
   var best = null, bestD = 999;
-  (pano.getLinks() || []).forEach(function (l) {
-    var d = angleDiff(l.heading, want);
+  ((pano && pano.getLinks && pano.getLinks()) || []).forEach(function (l) {
+    var d = angleDiff(l.heading, heading);
     if (d < bestD) { bestD = d; best = l; }
   });
-  if (!best || bestD > 75) { flash(dir < 0 ? '後面沒有路了' : '前面沒有路了,轉個方向試試'); return false; }
-  pano.setPano(best.pano);
+  return best && bestD <= maxDiff ? best : null;
+}
+
+// 換到下一張街景:短短淡出淡入,並把「正前方」轉成走的方向(坐著的人不用轉身)
+var stepping = false;
+function goLink(link) {
+  if (stepping) return;
+  stepping = true;
+  var f = $('fade');
+  f.style.transition = 'opacity 0.25s';
+  f.style.opacity = 1;
+  setTimeout(function () {
+    try {
+      pano.setPano(link.pano);
+      if (vr) panoBase = link.heading;
+      else pano.setPov({ heading: link.heading, pitch: 0 });
+    } catch (e) {}
+    f.style.opacity = 0;
+    setTimeout(function () { f.style.transition = ''; stepping = false; }, 300);
+  }, 260);
+}
+
+// dir = 1 往前、-1 往後:沿著街景的路走一步;沒有路回傳 false
+function step(dir) {
+  if (!pano || !pano.getLinks || stepping) return !stepping ? false : true;
+  var want = (bodyHeading() + (dir < 0 ? 180 : 0)) % 360;
+  var link = linkToward(want, 100);
+  if (!link) { flash(dir < 0 ? '後面沒有路了' : '前面沒有路了,可以按「迴轉」'); return false; }
+  goLink(link);
   return true;
+}
+
+// 迴轉:整個畫面轉 180 度(坐著不用轉身就能往回走)
+function turnAround() {
+  if (!pano) return;
+  walkAuto = false;
+  fadeTo(function () {
+    if (vr) panoBase = (panoBase + 180) % 360;
+    else { var pov = pano.getPov(); pano.setPov({ heading: (pov.heading + 180) % 360, pitch: 0 }); }
+  });
+}
+
+// 凝視地面前進:稍微低頭看前方地面(低 15~45 度,還不會叫出面板),那個方向有路就出現箭頭,
+// 圓圈填滿(2.5 秒)就往那邊走一步;頭稍微偏左右可以選叉路
+var GAZE_SEC = 2.5, gazeT = 0, gazeLink = null;
+function gazeStep(dt) {
+  var g = $('gaze');
+  var link = null;
+  if (vr && !stepping && lookPitch < -15 && lookPitch > -45) link = linkToward(viewHeading(), 30);
+  if (!link || (gazeLink && link.pano !== gazeLink.pano)) gazeT = 0;
+  gazeLink = link;
+  if (!link) { g.style.display = 'none'; return; }
+  gazeT += dt;
+  // 箭頭指向路相對於臉的方向
+  var rel = ((link.heading - viewHeading()) % 360 + 540) % 360 - 180;
+  $('gazeArrow').style.transform = 'rotate(' + rel + 'deg)';
+  g.style.setProperty('--p', Math.min(100, gazeT / GAZE_SEC * 100) + '%');
+  g.style.display = 'flex';
+  if (gazeT >= GAZE_SEC) { gazeT = 0; walkAuto = false; goLink(link); g.style.display = 'none'; }
+}
+
+// 降落後如果正前方沒有路(例如路是左右向),自動轉到最近的一條路,坐著也能直接走
+function faceRoad() {
+  if (!pano || linkToward(panoBase, 45)) return;
+  var link = linkToward(panoBase, 180);
+  if (!link) return;
+  if (vr) panoBase = link.heading;
+  else pano.setPov({ heading: link.heading, pitch: 0 });
 }
 
 // 目前所在的路名 / 地名
@@ -539,6 +625,7 @@ function roadName() {
 
 function takeOff() {
   walkAuto = false;
+  $('gaze').style.display = 'none';
   fadeTo(function () {
     landed = false;
     $('sv').style.display = 'none';
@@ -658,6 +745,7 @@ $('cLand').onclick = function () { window.vrFlight('land'); };
 $('cFwd').onclick = function () { window.vrFlight('fwd'); };
 $('cAuto').onclick = function () { window.vrFlight('auto'); };
 $('cHome').onclick = function () { window.vrFlight('home'); };
+$('cTurn').onclick = function () { window.vrFlight('turn'); };
 $('cPick').onclick = openPick;
 $('cMenu').onclick = function () { if (landed) landed = false; place = null; showMenu(); };
 

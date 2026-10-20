@@ -1602,7 +1602,7 @@ class MainActivity : Activity(), SensorEventListener {
             VrMenu.BTN_FLY_NEXT -> p.run("window.vrFlight&&vrFlight('next')")
             VrMenu.BTN_FLY_LAND -> p.run("window.vrFlight&&vrFlight('land')")
             VrMenu.BTN_WALK_FWD -> { p.run("window.vrFlight&&vrFlight('fwd')"); pollStatus() }
-            VrMenu.BTN_WALK_BACK -> { p.run("window.vrFlight&&vrFlight('back')"); pollStatus() }
+            VrMenu.BTN_WALK_BACK -> { p.run("window.vrFlight&&vrFlight('turn')"); pollStatus() }
             VrMenu.BTN_WALK_AUTO -> { p.run("window.vrFlight&&vrFlight('auto')"); menu.walking = !menu.walking }
             VrMenu.BTN_WALK_SLOWER -> { p.run("window.vrFlight&&vrFlight('slower')"); pollStatus() }
             VrMenu.BTN_WALK_FASTER -> { p.run("window.vrFlight&&vrFlight('faster')"); pollStatus() }

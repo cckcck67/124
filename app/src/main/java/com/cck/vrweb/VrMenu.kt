@@ -60,14 +60,14 @@ class VrMenu {
         const val BTN_FLY_LOWER = 13     //           飛低一點
         const val BTN_FLY_HIGHER = 14    //           飛高一點
         const val BTN_WALK_FWD = 15      // 街景散步:前進
-        const val BTN_WALK_BACK = 16     //           後退
+        const val BTN_WALK_BACK = 16     //           迴轉(整個畫面轉 180 度往回走)
         const val BTN_WALK_AUTO = 17     //           自動散步 / 停止
         const val BTN_WALK_SLOWER = 18   //           走慢一點
         const val BTN_WALK_FASTER = 19   //           走快一點
         const val BTN_WALK_HOME = 20     //           回降落點
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
             "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛高－", "飛高＋",
-            "前進", "後退", "自動散步", "走快－", "走快＋", "回降落點")
+            "前進", "迴轉", "自動散步", "走快－", "走快＋", "回降落點")
 
         /** 影片(網頁、我的影片)用的按鈕 */
         val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
