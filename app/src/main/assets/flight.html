@@ -176,7 +176,8 @@ window.gm_authFailure = function () {
 window.vrSetKey = function (k) {
   key = k || '';
   if (!key) {
-    msg('還沒有設定 Google 金鑰<br><button onclick="location.href=\'vrweb://key\'">設定金鑰</button>');
+    msg('還沒有設定 Google 金鑰(空中遊覽要用)<br><button onclick="location.href=\'vrweb://key\'">設定金鑰</button> ' +
+        '<button onclick="location.href=\'vrweb://keyhelp\'">怎麼申請金鑰</button>');
     return;
   }
   msg('');
@@ -328,7 +329,10 @@ function loadMaps() {
     var s = document.createElement('script');
     s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) +
             '&v=beta&libraries=maps3d&language=zh-TW&callback=__mapsReady';
-    s.onerror = function () { loading = null; fail(new Error('無法連線到 Google 地圖')); };
+    s.onerror = function () {
+      loading = null;
+      fail(new Error(navigator.onLine === false ? '手機沒有連上網路' : '無法連線到 Google 地圖,請確認網路'));
+    };
     document.head.appendChild(s);
   });
   return loading;
@@ -550,23 +554,29 @@ function linkToward(heading, maxDiff) {
   return best && bestD <= maxDiff ? best : null;
 }
 
-// 換到下一張街景:短短淡出淡入,並把「正前方」轉成走的方向(坐著的人不用轉身)
+// 換到下一張街景:先轉向要走的方向,目前畫面從中間往外放大(像往前走),
+// 放大到一半換成下一張,再從稍微放大的狀態收回正常,不用黑幕閃一下
 var stepping = false;
 function goLink(link) {
   if (stepping) return;
   stepping = true;
-  var f = $('fade');
-  f.style.transition = 'opacity 0.25s';
-  f.style.opacity = 1;
+  try {
+    if (vr) panoBase = link.heading;   // 正前方轉成路的方向(坐著的人不用轉身)
+    else pano.setPov({ heading: link.heading, pitch: 0 });
+  } catch (e) {}
+  var sv = $('sv');
+  sv.style.transformOrigin = '50% 50%';
+  sv.style.transition = 'transform 0.45s ease-in';
+  sv.style.transform = 'scale(1.6)';
   setTimeout(function () {
-    try {
-      pano.setPano(link.pano);
-      if (vr) panoBase = link.heading;
-      else pano.setPov({ heading: link.heading, pitch: 0 });
-    } catch (e) {}
-    f.style.opacity = 0;
-    setTimeout(function () { f.style.transition = ''; stepping = false; }, 300);
-  }, 260);
+    try { pano.setPano(link.pano); } catch (e) {}
+    sv.style.transition = 'none';
+    sv.style.transform = 'scale(1.15)';
+    void sv.offsetWidth;   // 先套用,再接著縮回
+    sv.style.transition = 'transform 0.35s ease-out';
+    sv.style.transform = 'scale(1)';
+    setTimeout(function () { sv.style.transition = ''; stepping = false; }, 380);
+  }, 460);
 }
 
 // dir = 1 往前、-1 往後:沿著街景的路走一步;沒有路回傳 false

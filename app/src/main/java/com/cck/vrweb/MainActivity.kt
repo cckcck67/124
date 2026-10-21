@@ -376,6 +376,7 @@ class MainActivity : Activity(), SensorEventListener {
             addView(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
             addView(settingRow("Google 金鑰(空中遊覽):" +
                     if (prefs.getString("mapsKey", "").isNullOrBlank()) "未設定" else "已設定") { askMapsKey() })
+            addView(settingRow("Google 金鑰申請、帳單與用量上限教學") { showKeyHelp() })
             addView(settingRow("檢查更新(目前版本 ${versionName()})") {
                 Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
             })
@@ -854,12 +855,52 @@ class MainActivity : Activity(), SensorEventListener {
             .setTitle("Google 地圖錯誤")
             .setMessage("$why\n\n(錯誤代碼:$code)")
             .setPositiveButton("知道了", null)
+            .setNeutralButton("看教學") { _, _ -> showKeyHelp() }
             .create()
         dlg.setOnDismissListener { hideSystemBars() }
         dlg.show()
     }
 
     private var pendingMapError: String? = null
+
+    /** Google 金鑰申請、綁定帳單、設定用量上限的教學(在電腦上照著做比較方便) */
+    private fun showKeyHelp() {
+        val text = """
+一、申請金鑰(約 10 分鐘,建議用電腦)
+1. 開 console.cloud.google.com,用 Google 帳號登入。
+2. 上方「選取專案」→「新增專案」,名稱隨意(例如 VR遊覽)→ 建立,並切換到這個專案。
+3. 左上 ☰ →「API 和服務」→「程式庫」,搜尋並「啟用」:
+   ・Maps JavaScript API(2D 地圖、街景)
+   ・Map Tiles API(3D 空拍)
+4. 「API 和服務」→「憑證」→「建立憑證」→「API 金鑰」,複製金鑰。
+5. 點這把金鑰 →「應用程式限制」選「網站」,加入:
+   https://appassets.androidplatform.net/*
+   「API 限制」勾選上面兩個 API → 儲存。(別人拿到金鑰也不能亂用)
+6. 回到本 App:設定 →「Google 金鑰」→ 貼上 → 儲存。
+
+二、綁定帳單(街景、2D 地圖正常顯示需要)
+1. ☰ →「帳單」→「連結帳單帳戶」→「建立帳單帳戶」。
+2. 國家選台灣,填信用卡資料 → 完成,確認專案已連結到這個帳單帳戶。
+3. Google 地圖每個功能每月有免費用量;自己和家人試用通常用不完。實際額度以 Google「Maps Platform 價格」頁面為準。
+
+三、設定用量上限(保證不會被收錢,最重要)
+1. ☰ →「API 和服務」→「已啟用的 API 和服務」→ 點「Maps JavaScript API」→「配額與系統限制」。
+2. 找名稱有「per day / 每天」的項目(例如每天地圖載入次數、街景載入次數)→ 勾選 →「編輯配額」→ 設成小數字,例如 300 → 送出。
+3. 「Map Tiles API」也照同樣方式,每天的上限設小一點(例如 300)。
+   超過上限只會當天載不出來,不會繼續計費。
+4. 再加一道提醒:☰ →「帳單」→「預算與快訊」→「建立預算」→ 金額填 NT$30 → 50%、90%、100% 寄信通知。
+   (預算只會寄信提醒,不會自動停用;真正擋住費用的是第 1~3 步的每天上限)
+
+畫面名稱可能和這裡寫的略有不同,卡住時截圖給開發者看。""".trimIndent()
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Google 金鑰教學")
+            .setMessage(text)
+            .setPositiveButton("設定金鑰") { _, _ -> askMapsKey() }
+            .setNegativeButton("關閉", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
 
     // ---------------- 書籤 ----------------
 
@@ -995,7 +1036,12 @@ class MainActivity : Activity(), SensorEventListener {
         virtualDisplay = vd
         presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
-            it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
+            it.onAppCommand = { cmd ->
+                when (cmd) {
+                    "key" -> askMapsKey()
+                    "keyhelp" -> showKeyHelp()
+                }
+            }
             it.onMapError = { code -> handler.post { showMapError(code) } }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
             it.onFullscreen = { on -> onWebFullscreen(on) }
