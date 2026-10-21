@@ -15,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -80,6 +81,9 @@ class WebPresentation(
     var onAppCommand: (String) -> Unit = {}
     /** Google 地圖回報的錯誤代碼(例如 BillingNotEnabledMapError),每種只通知一次 */
     var onMapError: (String) -> Unit = {}
+    /** 網頁的繪製程序被系統關掉(多半是記憶體不足);參數 = 最後的網址 */
+    var onRendererGone: (String?) -> Unit = {}
+    private var lastUrl: String? = null
     private val mapErrorsSeen = HashSet<String>()
 
     // 內建頁面用 https://appassets.androidplatform.net/assets/… 提供(金鑰可限定只給這個網址用)
@@ -189,7 +193,14 @@ class WebPresentation(
                 assetLoader.shouldInterceptRequest(request.url)
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                lastUrl = url
                 onUrlChanged(url)
+            }
+
+            // 網頁用掉太多記憶體被系統關掉時,回傳 true 讓 App 不要跟著閃退,改由 App 重建網頁
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                onRendererGone(lastUrl)
+                return true
             }
 
             override fun onPageFinished(view: WebView, url: String?) {

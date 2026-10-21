@@ -1043,6 +1043,7 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
             it.onMapError = { code -> handler.post { showMapError(code) } }
+            it.onRendererGone = { url -> handler.post { onWebCrashed(url) } }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
             it.onFullscreen = { on -> onWebFullscreen(on) }
             it.show()
@@ -1070,6 +1071,30 @@ class MainActivity : Activity(), SensorEventListener {
         // 先問網頁目前播放到哪裡,重新載入後跳回去
         p.videoStatus { st -> recreateWeb(p.currentUrl ?: "about:blank", st?.current ?: -1.0) }
     }
+
+    /** 網頁被系統關掉(記憶體不足):重建網頁回到原本的網址,App 不閃退 */
+    private var lastCrashAt = 0L
+    private fun onWebCrashed(url: String?) {
+        val now = SystemClock.uptimeMillis()
+        val again = now - lastCrashAt < 60_000
+        lastCrashAt = now
+        if (vrMode) setVr(false)
+        // 一分鐘內又被關掉:先停在空白頁,避免一直重開
+        recreateWeb(if (again) "about:blank" else (url ?: "about:blank"), -1.0)
+        val tip = if (quality >= QUALITY_4K) "建議到設定把畫質改成 1440p。" else "可以關掉其他 App 再試。"
+        toast("手機記憶體不足,網頁被系統關掉,已重新載入。$tip")
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // 手機記憶體很緊時提醒(4K 畫質最吃記憶體)
+        @Suppress("DEPRECATION")
+        if (level == TRIM_MEMORY_RUNNING_CRITICAL && quality >= QUALITY_4K && !memTipShown) {
+            memTipShown = true
+            toast("手機記憶體快不夠了,建議把畫質改成 1440p")
+        }
+    }
+    private var memTipShown = false
 
     private fun recreateWeb(url: String, at: Double) {
         val q = quality

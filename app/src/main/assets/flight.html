@@ -623,7 +623,8 @@ function goLink(link) {
     if (!vr) back.setPov({ heading: link.heading, pitch: 0 });
     var front = pano.__div;
     front.style.transformOrigin = '50% 50%';
-    front.style.transition = 'transform 0.45s ease-in, opacity 0.45s ease-in';
+    // 放大慢慢進行,淡出也拉長(約 1.5 秒),下一張已在後面,看起來是慢慢融合過去
+    front.style.transition = 'transform 1.5s ease-out, opacity 1.2s ease-in 0.3s';
     front.style.transform = 'scale(1.5)';
     front.style.opacity = '0';
     setTimeout(function () {
@@ -637,7 +638,7 @@ function goLink(link) {
       front.style.opacity = '';
       stepping = false;
       preloadAhead();
-    }, 470);
+    }, 1520);
   })();
 }
 
