@@ -307,7 +307,8 @@ const settings = {
   rules: {
     maxFish: 1,        // 每天魚料理上限
     maxFried: 1,       // 每天炸物上限
-    maxSameMeat: 2,    // 同一種肉(豬 / 雞)每天上限
+    mainCount: 2,      // 飯菜日主菜道數(豬 / 雞 / 魚三選二)
+    maxSameMeat: 1,    // 同一種肉(豬 / 雞)每天上限
     maxDark: 2,        // 深色醬汁超過幾道就提醒
     needGreen: true,   // 蔬菜至少一道綠色青菜(提醒)
     nonriceCount: 1,   // 非飯菜日幾道餐點

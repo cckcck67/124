@@ -12,6 +12,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import org.json.JSONObject
 import java.io.File
 
 /**
@@ -28,9 +29,11 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private var pageReady = false
     private val dataFile by lazy { File(filesDir, "meal.json") }
+    private val prevFile by lazy { File(filesDir, "meal.prev.json") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        keepPrevious()
         window.statusBarColor = Color.parseColor("#D9661F")
         window.navigationBarColor = Color.WHITE
         @Suppress("DEPRECATION")
@@ -49,6 +52,18 @@ class MainActivity : Activity() {
         }
         setContentView(web)
         web.loadUrl("file:///android_asset/index.html")
+    }
+
+    // 每次打開 App 先留一份上次的資料(存檔萬一壞掉,畫面會改讀這份,不用重新輸入)
+    private fun keepPrevious() {
+        try {
+            if (!dataFile.exists() || dataFile.length() == 0L) return
+            val text = dataFile.readText()
+            JSONObject(text)   // 存檔壞掉就不要蓋掉之前好的備份
+            prevFile.writeText(text)
+        } catch (e: Exception) {
+            // 備份失敗不影響使用
+        }
     }
 
     // 切到背景前把還沒寫進檔案的資料存好
@@ -84,6 +99,13 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun load(): String = try {
             if (dataFile.exists()) dataFile.readText() else ""
+        } catch (e: Exception) {
+            ""
+        }
+
+        @JavascriptInterface
+        fun loadPrev(): String = try {
+            if (prevFile.exists()) prevFile.readText() else ""
         } catch (e: Exception) {
             ""
         }

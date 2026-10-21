@@ -46,20 +46,21 @@ test('菜商批次:一叫二三、三叫四五六、六叫日一(星期一不送
   assert.strictEqual(b('2026-10-25').deliverDate, '2026-10-25');
 });
 
-test('抽一天:3 主菜 + 2 蔬菜 + 1 蛋,符合硬規則', () => {
+test('抽一天:主菜三選二 + 2 蔬菜 + 1 蛋,符合硬規則', () => {
   for (let k = 1; k <= 30; k++) {
     const s = fresh();
     const day = ML.drawDay(s, TODAY, rng(k));
     const m = ML.maps(s);
     const ds = day.dishes.map(x => m.dish[x.id]);
     assert.ok(ds.every(Boolean), '有空格');
-    assert.deepStrictEqual(day.dishes.map(x => x.slot), ['main', 'main', 'main', 'veg', 'veg', 'egg']);
-    assert.ok(ds.slice(0, 3).every(d => ['pork', 'chicken', 'fish'].includes(d.kind)));
-    assert.ok(ds.slice(3, 5).every(d => d.kind === 'veg'));
-    assert.strictEqual(ds[5].kind, 'egg');
+    assert.deepStrictEqual(day.dishes.map(x => x.slot), ['main', 'main', 'veg', 'veg', 'egg']);
+    assert.ok(ds.slice(0, 2).every(d => ['pork', 'chicken', 'fish'].includes(d.kind)));
+    assert.notStrictEqual(ds[0].kind, ds[1].kind, '兩道主菜要不同種類');
+    assert.ok(ds.slice(2, 4).every(d => d.kind === 'veg'));
+    assert.strictEqual(ds[4].kind, 'egg');
     assert.ok(ds.filter(d => d.kind === 'fish').length <= 1, '魚超過 1 道');
     assert.ok(ds.filter(d => d.method === '炸').length <= 1, '炸物超過 1 道');
-    assert.strictEqual(new Set(ds.map(d => d.main)).size, 6, '主體食材重複');
+    assert.strictEqual(new Set(ds.map(d => d.main)).size, 5, '主體食材重複');
     assert.ok(ds.every(d => d.status === '常用' || d.status === '輪替'), '抽到候選或停用');
   }
 });
@@ -97,7 +98,7 @@ test('局部重抽不動其他菜,鎖定的菜整天重抽也不變', () => {
   const before = s.days[TODAY].dishes.map(x => x.id);
   ML.redrawSlot(s, TODAY, 1, rng(4));
   const after = s.days[TODAY].dishes.map(x => x.id);
-  [0, 2, 3, 4, 5].forEach(i => assert.strictEqual(after[i], before[i]));
+  [0, 2, 3, 4].forEach(i => assert.strictEqual(after[i], before[i]));
   assert.notStrictEqual(after[1], before[1]);
 
   s.days[TODAY].dishes[0].locked = true;
@@ -121,7 +122,7 @@ test('改成非飯菜日:換成非飯菜日卡池', () => {
   assert.strictEqual(day.dishes.length, 1);
   assert.strictEqual(m.dish[day.dishes[0].id].kind, 'nonrice');
   ML.setDayType(s, TODAY, 'rice', rng(3));
-  assert.strictEqual(s.days[TODAY].dishes.length, 6);
+  assert.strictEqual(s.days[TODAY].dishes.length, 5);
 });
 
 test('用量:同一食材彙總、依級距進位、庫存品不列入', () => {
@@ -211,4 +212,71 @@ test('每週報告:只列菜名', () => {
   assert.strictEqual(lines[0], '【本週員工餐】10/21(三)～10/27(二)');
   assert.ok(!r.includes('斤'));
   assert.ok(r.includes('10/23(五)'));
+});
+
+test('自己輸入菜名:不被重抽換掉、不算叫貨、會出現在週報', () => {
+  const s = fresh();
+  const dates = ML.range(TODAY, 7);
+  ML.drawWeek(s, dates, rng(4));
+  ML.setCustom(s, TODAY, 0, '市場烤鴨');
+  ML.drawWeek(s, dates, rng(5));
+  ML.drawDay(s, TODAY, rng(6));
+  assert.strictEqual(s.days[TODAY].dishes[0].custom, '市場烤鴨');
+  assert.ok(!ML.dayWarnings(s, TODAY).some(w => w.text.indexOf('空格') >= 0));
+  assert.ok(ML.weekReport(s, dates).split('\n')[3].startsWith('市場烤鴨、'));
+  ML.redrawSlot(s, TODAY, 0, rng(7));
+  assert.ok(!s.days[TODAY].dishes[0].custom, '重抽這一格就換回卡池的菜');
+  assert.ok(s.days[TODAY].dishes[0].id);
+});
+
+test('批次新增料理:解析格式、找不到的食材報錯', () => {
+  const s = fresh();
+  const r = ML.parseBatch(s, [
+    '# 註解',
+    '蔬菜 蒜炒油菜:油菜 3.5、蒜末 0.2',
+    '豬肉 沙茶豬肉：豬肉片 4,洋蔥 2斤',
+    '魚 紅燒吳郭魚:吳郭魚 8',
+    '蔬菜 蒜炒高麗菜:高麗菜 3',
+    '蔬菜 炒火星菜:火星菜 3',
+    '甜點 布丁:雞蛋 30',
+    '蛋 煎蛋:雞蛋',
+    '',
+  ].join('\n'), '輪替');
+  assert.deepStrictEqual(r.dishes.map(d => d.name), ['蒜炒油菜', '沙茶豬肉', '紅燒吳郭魚']);
+  assert.strictEqual(r.errors.length, 4);
+  assert.ok(r.errors[0].msg.indexOf('已經有') >= 0);
+  assert.ok(r.errors[1].msg.indexOf('火星菜') >= 0);
+  const pork = r.dishes[1];
+  assert.strictEqual(pork.kind, 'pork');
+  assert.strictEqual(pork.status, '輪替');
+  assert.strictEqual(pork.flavor, '沙茶');
+  assert.strictEqual(pork.ings[1].q, 2);
+  assert.strictEqual(r.dishes[2].method, '滷燒燉');
+  assert.strictEqual(r.dishes[2].sauce, '深');
+});
+
+test('舊版存檔升級:資料保留,主菜改成三選二', () => {
+  const s = fresh();
+  ML.drawWeek(s, ML.range(TODAY, 7), rng(1));
+  delete s.settings.rules.mainCount;
+  s.settings.rules.maxSameMeat = 2;
+  const old = JSON.parse(JSON.stringify(s));
+  const up = ML.migrate(JSON.parse(JSON.stringify(old)));
+  assert.strictEqual(up.settings.rules.mainCount, 2);
+  assert.strictEqual(up.settings.rules.maxSameMeat, 1);
+  assert.deepStrictEqual(up.days, old.days);
+  assert.deepStrictEqual(up.dishes, old.dishes);
+  assert.deepStrictEqual(up.items, old.items);
+  // 舊的 6 道菜那天重抽後變成 5 道,鎖定的菜和自己輸入的菜保留
+  const day = up.days[TODAY];
+  day.dishes = [{ slot: 'main', id: null, locked: false }].concat(day.dishes);   // 舊版是 3 主菜
+  assert.strictEqual(day.dishes.length, 6);
+  ML.setCustom(up, TODAY, 1, '市場烤鴨');
+  day.dishes[4].locked = true;
+  const lockedVeg = day.dishes[4].id;
+  ML.drawDay(up, TODAY, rng(2));
+  const ds = up.days[TODAY].dishes;
+  assert.strictEqual(ds.length, 5);
+  assert.ok(ds.some(x => x.custom === '市場烤鴨'));
+  assert.ok(ds.some(x => x.id === lockedVeg && x.locked));
 });

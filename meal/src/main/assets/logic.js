@@ -50,6 +50,20 @@ function initState(seed) {
   };
 }
 
+/**
+ * 舊版存檔升級到目前的格式(只補新欄位、不刪資料),安裝新版後資料不會不見。
+ * 回傳同一個物件。
+ */
+function migrate(state) {
+  const r = state.settings.rules;
+  if (r.mainCount == null) {
+    // 1.0.95 以後:飯菜日主菜改成豬 / 雞 / 魚三選二(兩道主菜不同種類)
+    r.mainCount = 2;
+    r.maxSameMeat = 1;
+  }
+  return state;
+}
+
 function index(list) {
   const m = {};
   list.forEach(x => { m[x.id] = x; });
@@ -66,7 +80,8 @@ function slotsFor(state, type) {
     const n = Math.max(1, state.settings.rules.nonriceCount || 1);
     return Array(n).fill('nonrice');
   }
-  return ['main', 'main', 'main', 'veg', 'veg', 'egg'];
+  const n = Math.max(1, state.settings.rules.mainCount || 2);
+  return Array(n).fill('main').concat(['veg', 'veg', 'egg']);
 }
 function accepts(slot, dish) {
   if (slot === 'main') return dish.kind === 'pork' || dish.kind === 'chicken' || dish.kind === 'fish';
@@ -75,6 +90,14 @@ function accepts(slot, dish) {
 function slotLabel(slot, dish) {
   if (slot === 'main' && dish) return KIND_NAME[dish.kind];
   return SLOT_NAME[slot];
+}
+
+/** 這一格有菜(卡池的菜,或自己輸入的菜名)。 */
+function filled(x) { return !!(x.id || x.custom); }
+/** 一格的菜名:卡池的菜或自己輸入的(外購、外來菜)。 */
+function dishName(m, x) {
+  if (x.custom) return x.custom;
+  return x.id && m.dish[x.id] ? m.dish[x.id].name : '';
 }
 
 // ---------- 規則 ----------
@@ -151,7 +174,7 @@ function dayWarnings(state, date) {
   const r = state.settings.rules;
   const out = [];
   const list = day.dishes.map(x => x.id && m.dish[x.id]).filter(Boolean);
-  if (day.dishes.some(x => !x.id)) out.push({ level: 'warn', text: '有空格:卡池裡沒有符合條件的菜,請手動選擇' });
+  if (day.dishes.some(x => !filled(x))) out.push({ level: 'warn', text: '有空格:卡池裡沒有符合條件的菜,請手動選擇' });
   if (day.type !== 'rice') return out;
 
   const dark = list.filter(d => d.sauce === '深');
@@ -223,10 +246,11 @@ function pick(list, weights, rng) {
 /** 填滿 dishes 裡沒鎖定的格子;嘗試多次,留下搭配分數最好的一組。 */
 function fill(state, date, dishes, rng, tries) {
   const m = maps(state);
-  const open = dishes.map((x, i) => (x.locked && x.id ? -1 : i)).filter(i => i >= 0);
+  const keep = x => x.locked && filled(x);   // 鎖定的菜、自己輸入的菜不動
+  const open = dishes.map((x, i) => (keep(x) ? -1 : i)).filter(i => i >= 0);
   let best = null, bestP = Infinity;
   for (let t = 0; t < (tries || 60); t++) {
-    const cur = dishes.map(x => (x.locked && x.id ? Object.assign({}, x) : { slot: x.slot, id: null, locked: false }));
+    const cur = dishes.map(x => (keep(x) ? Object.assign({}, x) : { slot: x.slot, id: null, locked: false }));
     // 選擇少的格子先抽(魚、蛋比較少),比較不會卡住
     const order = open.slice().sort((a, b) => (cur[a].slot === 'main' ? 1 : 0) - (cur[b].slot === 'main' ? 1 : 0));
     for (const i of order) {
@@ -238,7 +262,7 @@ function fill(state, date, dishes, rng, tries) {
         }
       }
     }
-    const p = penalty(state, m, date, cur) + cur.filter(x => !x.id).length * 100;
+    const p = penalty(state, m, date, cur) + cur.filter(x => !filled(x)).length * 100;
     if (p < bestP) { best = cur; bestP = p; }
     if (p === 0) break;
   }
@@ -254,7 +278,15 @@ function drawDay(state, date, rng, type) {
   const old = state.days[date];
   const t = type || (old && old.type) || 'rice';
   let day = old && old.type === t ? old : emptyDay(state, t);
-  if (day.dishes.length !== slotsFor(state, t).length) day = emptyDay(state, t);
+  if (day.dishes.length !== slotsFor(state, t).length) {
+    // 格子數變了(例如主菜從 3 道改成 2 道):鎖定的菜、自己輸入的菜搬到新的格子
+    const fresh = emptyDay(state, t);
+    day.dishes.filter(x => x.locked && filled(x)).forEach(x => {
+      const k = fresh.dishes.findIndex(y => y.slot === x.slot && !filled(y));
+      if (k >= 0) fresh.dishes[k] = Object.assign({}, x);
+    });
+    day = fresh;
+  }
   state.days[date] = { type: t, dishes: fill(state, date, day.dishes, rng) };
   return state.days[date];
 }
@@ -264,8 +296,9 @@ function redrawSlot(state, date, idx, rng) {
   const day = state.days[date];
   const m = maps(state);
   const cur = day.dishes.map(x => Object.assign({}, x));
-  const oldId = cur[idx].id;
+  const oldId = cur[idx].id, oldCustom = cur[idx].custom;
   cur[idx].id = null;
+  delete cur[idx].custom;
   for (let level = 0; level <= 2; level++) {
     let cands = state.dishes.filter(d => !hardCheck(state, m, date, cur, idx, d, level, false));
     if (cands.length > 1) cands = cands.filter(d => d.id !== oldId);   // 換一道不一樣的
@@ -274,7 +307,7 @@ function redrawSlot(state, date, idx, rng) {
       break;
     }
   }
-  if (!cur[idx].id) cur[idx].id = oldId;
+  if (!cur[idx].id) { cur[idx].id = oldId; if (oldCustom) cur[idx].custom = oldCustom; }
   cur[idx].locked = false;
   day.dishes = cur;
   return cur[idx].id;
@@ -284,7 +317,7 @@ function redrawSlot(state, date, idx, rng) {
 function drawWeek(state, dates, rng) {
   dates.forEach(d => {
     const old = state.days[d];
-    if (old) old.dishes.forEach(x => { if (!x.locked) x.id = null; });
+    if (old) old.dishes.forEach(x => { if (!x.locked) { x.id = null; delete x.custom; } });
   });
   dates.forEach(d => drawDay(state, d, rng));
 }
@@ -330,6 +363,15 @@ function orderedItems(state, date) {
 function setDish(state, date, idx, dishId) {
   const x = state.days[date].dishes[idx];
   x.id = dishId;
+  delete x.custom;
+}
+
+/** 自己輸入菜名(外購的烤鴨、油雞…):不在卡池、不算叫貨,重抽時不會被換掉。 */
+function setCustom(state, date, idx, name) {
+  const x = state.days[date].dishes[idx];
+  x.id = null;
+  x.custom = name;
+  x.locked = true;
 }
 
 // ---------- 用量 ----------
@@ -543,13 +585,13 @@ function weekReport(state, dates) {
   const out = ['【本週員工餐】' + coverText([used[0], used[used.length - 1]])];
   used.forEach(d => {
     const day = state.days[d];
-    const names = day.dishes.map(x => x.id && m.dish[x.id] && m.dish[x.id].name).filter(Boolean);
+    const names = xs => xs.map(x => dishName(m, x)).filter(Boolean).join('、');
     out.push('');
-    out.push(fmt(d) + (day.type === 'nonrice' ? '' : ''));
-    if (day.type === 'nonrice') out.push(names.join('、'));
+    out.push(fmt(d));
+    if (day.type === 'nonrice') out.push(names(day.dishes));
     else {
-      out.push(names.slice(0, 3).join('、'));
-      out.push(names.slice(3).join('、'));
+      out.push(names(day.dishes.filter(x => x.slot === 'main')));   // 主菜一行、蔬菜和蛋一行
+      out.push(names(day.dishes.filter(x => x.slot !== 'main')));
     }
   });
   return out.join('\n');
@@ -577,10 +619,72 @@ function itemUsed(state, id) {
   return false;
 }
 
+// ---------- 批次新增料理 ----------
+const KIND_WORDS = { 豬肉: 'pork', 豬: 'pork', 雞肉: 'chicken', 雞: 'chicken', 魚: 'fish', 魚類: 'fish',
+  蔬菜: 'veg', 青菜: 'veg', 菜: 'veg', 蛋: 'egg', 蛋料理: 'egg', 非飯菜日: 'nonrice', 非飯: 'nonrice' };
+function guessMethod(name) {
+  if (/炸|酥/.test(name)) return '炸';
+  if (/煎/.test(name)) return '煎';
+  if (/滷|燒|燉|燜|扣/.test(name)) return '滷燒燉';
+  if (/蒸/.test(name)) return '蒸';
+  if (/烤/.test(name)) return '烤';
+  if (/湯|羹|粥|煮|燴|餃/.test(name)) return '煮';
+  return '炒';
+}
+function guessSauce(name) { return /滷|紅燒|醬燒|三杯|京醬|黑胡椒|扣/.test(name) ? '深' : '淺'; }
+function guessFlavor(name) {
+  const f = ['糖醋', '茄汁', '咖哩', '椒鹽', '三杯', '黑胡椒', '沙茶', '照燒', '紅燒', '滷'];
+  for (const x of f) if (name.indexOf(x) >= 0) return x;
+  return '';
+}
+/** 找品項:原始品名或標準名稱完全一樣。 */
+function findItem(state, name) {
+  return state.items.find(it => it.name === name) || state.items.find(it => it.std === name) || null;
+}
+
+/**
+ * 批次新增料理的文字,一行一道:
+ *   類別 菜名:食材 用量、食材 用量
+ *   例:蔬菜 蒜炒高麗菜:高麗菜 3、紅K絲 0.3、蒜末 0.2
+ * 回傳 { dishes: [新料理], errors: [{ line, text, msg }] }。有錯的那行不會加入。
+ */
+function parseBatch(state, text, status) {
+  const dishes = [], errors = [];
+  const names = {};
+  state.dishes.forEach(d => { names[d.name] = 1; });
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line[0] === '#') return;
+    const err = msg => errors.push({ line: i + 1, text: line, msg });
+    const p = line.search(/[:：]/);
+    if (p < 0) return err('少了「:」(菜名和食材之間)');
+    const head = line.slice(0, p).trim().split(/\s+/);
+    const kind = KIND_WORDS[head[0]];
+    if (!kind) return err('開頭要寫類別:豬肉、雞肉、魚、蔬菜、蛋、非飯菜日');
+    const name = head.slice(1).join(' ').trim();
+    if (!name) return err('沒有菜名');
+    if (names[name]) return err('卡池已經有「' + name + '」');
+    const parts = line.slice(p + 1).split(/[、,，;；]/).map(x => x.trim()).filter(Boolean);
+    if (!parts.length) return err('沒有食材');
+    const ings = [];
+    for (const part of parts) {
+      const mt = part.match(/^(.+?)\s*([0-9]+(?:\.[0-9]+)?)\s*(台斤|斤|盒|顆|尾|段|片|包|罐|支|條)?$/);
+      if (!mt) return err('「' + part + '」沒有寫用量');
+      const it = findItem(state, mt[1].trim());
+      if (!it) return err('品項資料庫沒有「' + mt[1].trim() + '」');
+      ings.push({ i: it.id, q: parseFloat(mt[2]) });
+    }
+    names[name] = 1;
+    dishes.push({ id: newId('d'), name, kind, status: status || '常用', method: guessMethod(name), sauce: guessSauce(name),
+      flavor: guessFlavor(name), risks: [], note: '', ings, main: ings[0].i });
+  });
+  return { dishes, errors };
+}
+
 const api = {
   WEEK, SLOT_NAME, KIND_NAME, STATUS, SUPPLIERS,
   ymd, parse, addDays, dow, diffDays, fmt, range, newId,
-  initState, maps, slotsFor, slotLabel, accepts, hardCheck, nearestUse,
+  initState, migrate, maps, filled, dishName, setCustom, parseBatch, findItem, slotsFor, slotLabel, accepts, hardCheck, nearestUse,
   vegBatch, vegBatches, dayWarnings,
   drawDay, redrawSlot, drawWeek, setDayType, candidates, setDish, orderedItems,
   needs, roundUp, qtyText, orderOf, saveOrder, orderView, setOverride, addExtra, removeLine, acceptComputed,
