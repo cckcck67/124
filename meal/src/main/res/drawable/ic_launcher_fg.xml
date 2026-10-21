@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 圖示:一碗飯和筷子(畫在 108dp 的中間 66dp 安全範圍內) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 筷子 -->
+    <path android:fillColor="#5A3A22" android:pathData="M56,28 L77,50 L75,52 L54,30 Z" />
+    <path android:fillColor="#5A3A22" android:pathData="M62,26 L81,48 L79,50 L60,28 Z" />
+    <!-- 飯 -->
+    <path android:fillColor="#FFF4E6" android:pathData="M33,55 A21,13 0 0,1 75,55 Z" />
+    <!-- 碗 -->
+    <path android:fillColor="#FFFFFF" android:pathData="M29,55 L79,55 A25,23 0 0,1 29,55 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M45,76 L63,76 L61,83 L47,83 Z" />
+    <!-- 碗上的線 -->
+    <path android:fillColor="#F2B48A" android:pathData="M33,62 L75,62 L73,66 L35,66 Z" />
+</vector>

@@ -27,6 +27,8 @@ jobs:
           gradle-version: '8.7'
       - name: Check built-in pages (HTML structure and script syntax)
         run: python3 tools/check_pages.py
+      - name: Meal app logic tests
+        run: node --test tools/meal_test.js
       - name: Startup test (must pass before publishing)
         run: gradle testDebugUnitTest -PbuildNumber=${{ github.run_number }}
       - name: Build debug APK
@@ -35,6 +37,7 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk VrWebPlayer.apk
           cp chat/build/outputs/apk/debug/chat-debug.apk PrankChat.apk
+          cp meal/build/outputs/apk/debug/meal-debug.apk MealPlanner.apk
           echo "{\"code\": $((100 + ${{ github.run_number }})), \"name\": \"2.0.${{ github.run_number }}\"}" > version.json
           cat version.json
       - name: Remove files no longer published
@@ -97,3 +100,27 @@ jobs:
           prerelease: false
           make_latest: false   # 首頁的「最新版本」留給 VR網頁播放器
           files: PrankChat.apk
+      - name: Publish meal planner app (its own release, meal-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: meal-latest
+          name: 員工餐 1.0.${{ github.run_number }}
+          body: |
+            ## 員工餐(Android)
+            員工餐的菜單抽卡、搭配檢查、叫貨單。和其他 App 是不同的 App,可以同時安裝。
+
+            **下載安裝**:用手機瀏覽器下載下方的 `MealPlanner.apk`,點開安裝;新版直接覆蓋,卡池、菜單、叫貨紀錄都會保留。
+
+            **怎麼用**
+            - 菜單:「抽一週」從今天往後排 7 天,點菜名可以換一道 / 手動選 / 用已叫貨的食材換菜,🔒 鎖定不被重抽
+            - 點「飯菜日 ▾」改成非飯菜日;「複製本週菜單」= 每週報告
+            - 叫貨:菜商依一、三、六排程自動計算;豬肉、雞肉自己選日期區間;複製或直接傳到 LINE
+            - 菜單改過會自動檢查叫貨單,已叫貨的會列出要追加 / 用不到的品項
+            - 今日:今天要做的菜和食材用量
+
+            完整說明:https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/meal.md
+
+            版本 1.0.${{ github.run_number }}(${{ github.sha }})
+          prerelease: false
+          make_latest: false   # 首頁的「最新版本」留給 VR網頁播放器
+          files: MealPlanner.apk

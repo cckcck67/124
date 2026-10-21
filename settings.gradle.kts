@@ -8,3 +8,4 @@ dependencyResolutionManagement {
 rootProject.name = "VrWebPlayer"
 include(":app")
 include(":chat")
+include(":meal")

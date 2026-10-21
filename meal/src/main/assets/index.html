@@ -1,0 +1,1199 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>員工餐</title>
+<style>
+:root {
+  --main: #d9661f; --main-soft: #fdf0e6; --bg: #f4f2ef; --card: #fff; --text: #222; --sub: #777; --line: #e6e2dc;
+  --warn: #b85c00; --warn-bg: #fff4e0; --ok: #2e8b57; --ok-bg: #e8f5ee; --bad: #c0392b; --bad-bg: #fdecea; --info-bg: #eef3fa; --info: #3b6aa8;
+  --pork: #c0504d; --chicken: #c98a1a; --fish: #2f78b7; --veg: #3c9a4f; --egg: #b8960c; --nonrice: #7b5aa6;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: sans-serif; font-size: 16px; }
+button { font: inherit; color: inherit; }
+input, select, textarea { font: inherit; }
+.hidden { display: none !important; }
+
+/* ---------- 版面 ---------- */
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+header { flex: none; height: 52px; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--main); color: #fff; }
+header h1 { flex: 1; margin: 0; font-size: 19px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+header button { background: none; border: 0; color: #fff; font-size: 15px; padding: 8px 10px; border-radius: 8px; }
+header button:active { background: rgba(255,255,255,.2); }
+#back { font-size: 26px; line-height: 1; padding: 4px 10px 8px; }
+main { flex: 1; overflow-y: auto; padding: 12px 12px 24px; -webkit-overflow-scrolling: touch; }
+nav { flex: none; display: flex; background: #fff; border-top: 1px solid var(--line); }
+nav button { flex: 1; background: none; border: 0; padding: 7px 0 8px; font-size: 12px; color: var(--sub); position: relative; }
+nav button .i { display: block; font-size: 21px; line-height: 26px; }
+nav button.on { color: var(--main); font-weight: 700; }
+.badge { position: absolute; top: 3px; left: 50%; margin-left: 8px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff;
+  font-size: 11px; line-height: 18px; padding: 0 5px; font-weight: 700; }
+
+/* ---------- 卡片、按鈕 ---------- */
+.card { background: var(--card); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.card h2 { font-size: 17px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.card h2 .sp { flex: 1; }
+.sec { font-size: 14px; color: var(--sub); margin: 18px 4px 8px; font-weight: 700; }
+.sec:first-child { margin-top: 2px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line); background: #fff; border-radius: 10px;
+  padding: 9px 14px; font-size: 15px; min-height: 42px; }
+.btn:active { filter: brightness(.94); }
+.btn.pri { background: var(--main); color: #fff; border-color: var(--main); font-weight: 700; }
+.btn.line { background: #06c755; color: #fff; border-color: #06c755; font-weight: 700; }
+.btn.bad { color: var(--bad); }
+.btn.sm { padding: 5px 10px; min-height: 34px; font-size: 14px; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btns.full > * { flex: 1; }
+.row-b { margin-top: 10px; }
+.muted { color: var(--sub); font-size: 14px; }
+.small { font-size: 13px; }
+.empty { text-align: center; color: var(--sub); padding: 18px 8px; }
+
+.pill { display: inline-block; font-size: 12px; border-radius: 10px; padding: 1px 8px; line-height: 20px; white-space: nowrap; background: #eee; color: #555; font-weight: 400; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.info { background: var(--info-bg); color: var(--info); }
+.pill.main { background: var(--main-soft); color: var(--main); }
+.k { display: inline-block; min-width: 40px; text-align: center; font-size: 12px; color: #fff; border-radius: 6px; padding: 2px 5px; flex: none; }
+.k.pork { background: var(--pork); } .k.chicken { background: var(--chicken); } .k.fish { background: var(--fish); }
+.k.veg { background: var(--veg); } .k.egg { background: var(--egg); } .k.nonrice { background: var(--nonrice); } .k.none { background: #aaa; }
+.st { font-size: 12px; padding: 0 6px; border-radius: 6px; border: 1px solid; flex: none; }
+.st.常用 { color: var(--ok); } .st.輪替 { color: var(--info); } .st.候選 { color: var(--warn); } .st.停用 { color: #999; }
+
+.note { border-radius: 10px; padding: 9px 12px; margin-bottom: 10px; font-size: 14px; line-height: 1.5; }
+.note.warn { background: var(--warn-bg); color: var(--warn); }
+.note.bad { background: var(--bad-bg); color: var(--bad); }
+.note.ok { background: var(--ok-bg); color: var(--ok); }
+.note.info { background: var(--info-bg); color: var(--info); }
+.note b { font-weight: 700; }
+.warns { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.warns li { padding: 2px 0 2px 20px; position: relative; color: var(--warn); }
+.warns li::before { content: '⚠'; position: absolute; left: 2px; }
+.warns li.info { color: var(--sub); }
+.warns li.info::before { content: 'ⓘ'; }
+
+/* ---------- 菜單 ---------- */
+.day h2 .date { font-size: 18px; }
+.day.today { box-shadow: 0 0 0 2px var(--main); }
+.dish { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); }
+.dish:first-of-type { border-top: 0; }
+.dish .n { flex: 1; min-width: 0; font-size: 16px; }
+.dish .n small { color: var(--sub); font-size: 12px; margin-left: 4px; }
+.lock { background: none; border: 0; font-size: 18px; padding: 4px 6px; opacity: .3; flex: none; }
+.lock.on { opacity: 1; }
+.type { border: 1px solid var(--line); background: #fff; border-radius: 14px; padding: 2px 10px; font-size: 13px; }
+.type.nonrice { background: #f1ecf8; color: var(--nonrice); border-color: #d9cdea; }
+.icon { background: none; border: 0; font-size: 20px; padding: 4px 8px; border-radius: 8px; }
+.icon:active { background: #eee; }
+
+/* 今日製作 */
+.cook { padding: 10px 0; border-top: 1px solid var(--line); }
+.cook:first-of-type { border-top: 0; padding-top: 2px; }
+.cook .t { display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 700; }
+.cook ul { margin: 6px 0 0 48px; padding: 0; list-style: none; font-size: 16px; line-height: 1.7; }
+.cook ul li span { color: var(--sub); font-size: 13px; }
+.cook .tip { margin: 4px 0 0 48px; font-size: 14px; color: var(--warn); }
+
+/* ---------- 叫貨 ---------- */
+.batch { display: flex; align-items: center; gap: 10px; }
+.batch .b { flex: 1; min-width: 0; }
+.batch .b .h { font-weight: 700; font-size: 16px; }
+.batch .b .s { color: var(--sub); font-size: 13px; margin-top: 2px; }
+.batch .pills { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.go { color: #bbb; font-size: 20px; }
+.ol { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+.ol:first-child { border-top: 0; }
+.ol .n { flex: 1; min-width: 0; }
+.ol .n small { display: block; color: var(--sub); font-size: 12px; }
+.ol .q { font-size: 17px; font-weight: 700; white-space: nowrap; }
+.ol .q.zero { color: #bbb; text-decoration: line-through; font-weight: 400; }
+.ol.short .n, .ol.short .q { color: var(--bad); }
+pre.txt { white-space: pre-wrap; background: #f7f7f5; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 15px; margin: 0; }
+
+/* ---------- 列表 / 表單 ---------- */
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 4px; }
+.chip { flex: none; border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 5px 12px; font-size: 14px; }
+.chip.on { background: var(--main); border-color: var(--main); color: #fff; }
+.search { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; margin-bottom: 10px; }
+.li { display: flex; align-items: center; gap: 8px; padding: 11px 2px; border-top: 1px solid var(--line); }
+.li:first-child { border-top: 0; }
+.li .n { flex: 1; min-width: 0; }
+.li .n small { display: block; color: var(--sub); font-size: 12px; margin-top: 1px; }
+.li.off { opacity: .5; }
+.f { margin-bottom: 12px; }
+.f > label { display: block; font-size: 13px; color: var(--sub); margin-bottom: 4px; }
+.f input[type=text], .f input[type=number], .f input:not([type]), .f select, .f textarea, .inp {
+  width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; background: #fff; }
+.f textarea { min-height: 70px; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.seg button { flex: 1; border: 0; background: #fff; padding: 8px 0; font-size: 14px; border-left: 1px solid var(--line); }
+.seg button:first-child { border-left: 0; }
+.seg button.on { background: var(--main); color: #fff; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 15px; }
+.checks label { display: inline-flex; align-items: center; gap: 4px; }
+.ing { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.f .ing select { flex: 1; width: auto; min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 8px 6px; background: #fff; }
+.f .ing input { flex: none; width: 70px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 6px; text-align: right; }
+.ing .u { width: 22px; font-size: 14px; color: var(--sub); }
+.ing button { border: 0; background: none; font-size: 18px; color: var(--bad); padding: 4px 6px; }
+.set { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.set:first-of-type { border-top: 0; }
+.set .n { flex: 1; }
+.set .n small { display: block; color: var(--sub); font-size: 12px; }
+.set input { width: 72px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; text-align: right; }
+.sched { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.sched:first-of-type { border-top: 0; }
+.sched select { border: 1px solid var(--line); border-radius: 8px; padding: 5px; }
+.wd { display: inline-flex; gap: 3px; }
+.wd button { width: 30px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: #fff; font-size: 13px; padding: 0; }
+.wd button.on { background: var(--main); color: #fff; border-color: var(--main); }
+
+/* ---------- 底部面板 ---------- */
+#sheet { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; justify-content: flex-end; }
+#sheet .mask { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
+#panel { position: relative; background: #fff; border-radius: 16px 16px 0 0; max-height: 88%; overflow-y: auto; padding: 14px 14px 20px; }
+#panel h3 { margin: 2px 0 10px; font-size: 18px; }
+#panel .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 13px 6px; font-size: 16px; border-top: 1px solid var(--line); }
+#panel .menu button:first-child { border-top: 0; }
+#panel .menu button:active { background: #f3f3f3; }
+#panel .menu button small { display: block; color: var(--sub); font-size: 12px; margin-top: 2px; }
+.pick { display: flex; align-items: center; gap: 8px; padding: 11px 4px; border-top: 1px solid var(--line); }
+.pick:first-child { border-top: 0; }
+.pick .n { flex: 1; min-width: 0; }
+.pick .n small { display: block; font-size: 12px; color: var(--warn); }
+.pick.no .n { color: #999; }
+#toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: rgba(30,30,30,.9); color: #fff; padding: 9px 16px; border-radius: 20px;
+  font-size: 14px; z-index: 20; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 86%; text-align: center; }
+#toast.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="back" class="hidden" data-a="back">‹</button>
+    <h1 id="title">員工餐</h1>
+    <span id="hright"></span>
+  </header>
+  <main id="main"></main>
+  <nav id="nav">
+    <button data-a="tab" data-t="today"><span class="i">🍳</span>今日</button>
+    <button data-a="tab" data-t="week"><span class="i">📅</span>菜單</button>
+    <button data-a="tab" data-t="orders"><span class="i">🧾</span>叫貨<span id="obadge" class="badge hidden"></span></button>
+    <button data-a="tab" data-t="pool"><span class="i">🃏</span>卡池</button>
+    <button data-a="tab" data-t="more"><span class="i">☰</span>更多</button>
+  </nav>
+</div>
+<div id="sheet" class="hidden"><div class="mask" data-a="closeSheet"></div><div id="panel"></div></div>
+<div id="toast"></div>
+
+<script src="seed.js"></script>
+<script src="logic.js"></script>
+<script>
+'use strict';
+const host = window.Android;
+const KEY = 'meal-state';
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const KINDS = ['pork', 'chicken', 'fish', 'veg', 'egg', 'nonrice'];
+const METHODS = ['炒', '煎', '炸', '滷燒燉', '蒸', '烤', '煮'];
+const RISKS = ['魚刺', '炸物回軟', '葉菜變黃', '出水'];
+const VEG_CATS = ['葉菜類', '瓜果類', '豆莢花菜類', '根莖類', '筍類'];
+
+// ---------- 存檔 ----------
+function load() {
+  let txt = '';
+  try { txt = host && host.load ? host.load() : (localStorage.getItem(KEY) || ''); } catch (e) { txt = ''; }
+  try {
+    if (txt) {
+      const s = JSON.parse(txt);
+      if (s && s.version === 1 && s.items && s.dishes) return s;
+    }
+  } catch (e) { /* 壞掉的存檔就用初始資料 */ }
+  return ML.initState(SEED);
+}
+let S = load();
+let saveTimer = null;
+function save() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 200); }
+function saveNow() {
+  clearTimeout(saveTimer);
+  const t = JSON.stringify(S);
+  try { if (host && host.save) host.save(t); else localStorage.setItem(KEY, t); } catch (e) { /* 存不了也不要讓畫面壞掉 */ }
+}
+window.saveNow = saveNow;
+window.addEventListener('pagehide', saveNow);
+// 回到 App 時重畫(可能過了午夜);正在編輯的表單不重畫,打到一半的字才不會不見
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) saveNow();
+  else if (!ui.sub || ['dish', 'item', 'settings', 'backup'].indexOf(ui.sub.type) < 0) rerender();
+});
+
+// ---------- 小工具 ----------
+const today = () => ML.ymd(new Date());
+const win = () => ML.range(today(), 7);
+const M = () => ML.maps(S);
+const nm = it => (it ? (it.std || it.name) : '?');
+const num = v => Math.round(v * 100) / 100;
+function toast(t) {
+  const el = $('#toast');
+  el.textContent = t;
+  el.classList.add('on');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => el.classList.remove('on'), 1800);
+}
+function copyText(t, msg) {
+  let ok = false;
+  try { if (host && host.copy) { host.copy(t); ok = true; } } catch (e) { ok = false; }
+  if (!ok) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    } catch (e) { /* 舊瀏覽器 */ }
+    try { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); } catch (e) { /* 沒有權限 */ }
+  }
+  toast(msg || '已複製');
+}
+function shareLine(t) {
+  if (host && host.shareLine) { host.shareLine(t); toast('已複製,開啟 LINE'); }
+  else copyText(t, '已複製,請貼到 LINE');
+}
+function kindTag(kind) { return '<span class="k ' + (kind || 'none') + '">' + esc(ML.KIND_NAME[kind] || '—') + '</span>'; }
+function stTag(st) { return '<span class="st ' + esc(st) + '">' + esc(st) + '</span>'; }
+
+// ---------- 畫面狀態 ----------
+const ui = { tab: 'today', sub: null, pool: { kind: 'all', status: 'all', q: '' }, itemQ: '', draft: null };
+
+function setTitle(t, back, right) {
+  $('#title').textContent = t;
+  $('#back').classList.toggle('hidden', !back);
+  $('#hright').innerHTML = right || '';
+}
+
+function render() {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === ui.tab));
+  const n = orderIssues();
+  const bd = $('#obadge');
+  bd.textContent = n;
+  bd.classList.toggle('hidden', !n);
+  const main = $('#main');
+  const keep = ui.keepScroll ? main.scrollTop : 0;
+  let html;
+  if (ui.sub) html = SUBS[ui.sub.type]();
+  else html = TABS[ui.tab]();
+  main.innerHTML = html;
+  main.scrollTop = keep;
+  ui.keepScroll = false;
+}
+function rerender() { ui.keepScroll = true; render(); }
+
+// ---------- 叫貨單 ----------
+function relevantOrders() {
+  const dates = win();
+  const list = ML.vegBatches(S, dates).map(b => ML.orderOf(S, b));
+  ['pork', 'chicken'].forEach(s => ML.meatOrders(S, s).forEach(o => {
+    if (o.coverDates[o.coverDates.length - 1] >= dates[0]) list.push(o);
+  }));
+  return list;
+}
+function orderIssues() {
+  let n = 0;
+  relevantOrders().forEach(o => {
+    const v = ML.orderView(S, o);
+    n += v.adds + v.extras + v.stale;
+  });
+  return n;
+}
+/** 改菜之後:如果影響到已叫貨的叫貨單,提醒一下。 */
+function afterMenuChange(dates) {
+  save();
+  const hit = relevantOrders().filter(o => o.status !== 'draft' && o.coverDates.some(d => dates.indexOf(d) >= 0))
+    .some(o => { const v = ML.orderView(S, o); return v.adds || v.extras; });
+  rerender();
+  if (hit) toast('已叫貨的食材有變動,請到「叫貨」查看');
+}
+function orderTitle(o) {
+  if (o.supplier === 'veg') return ML.supplierName(S, 'veg') + ' ' + ML.fmt(ML.addDays(o.orderDate, 1)) + ' 送';
+  return ML.supplierName(S, o.supplier) + ' ' + ML.coverText(o.coverDates);
+}
+function statusPill(o) {
+  if (o.status === 'arrived') return '<span class="pill ok">已到貨</span>';
+  if (o.status === 'sent') return '<span class="pill ok">已叫貨</span>';
+  if (o.orderDate && o.orderDate < today()) return '<span class="pill bad">已過叫貨日</span>';
+  if (o.orderDate === today()) return '<span class="pill main">今天叫</span>';
+  return '<span class="pill">未叫貨</span>';
+}
+function issuePills(v) {
+  let h = '';
+  if (v.adds) h += '<span class="pill bad">需追加 ' + v.adds + '</span>';
+  if (v.extras) h += '<span class="pill warn">用不到 ' + v.extras + '</span>';
+  if (v.stale) h += '<span class="pill warn">手動量待確認 ' + v.stale + '</span>';
+  if (v.order.status === 'draft' && v.order.copied && v.order.copied !== ML.orderText(S, v, 'full')) h += '<span class="pill warn">複製後有更新</span>';
+  return h;
+}
+function findOrder(key) {
+  if (S.orders[key]) return S.orders[key];
+  const all = ML.vegBatches(S, win().concat(pastDates(14)));
+  const b = all.find(x => x.key === key);
+  return b ? ML.orderOf(S, b) : null;
+}
+function pastDates(n) { return ML.range(ML.addDays(today(), -n), n); }
+
+// =====================================================================
+// 今日
+// =====================================================================
+function dishBlock(m, x, withIngs) {
+  const d = x.id && m.dish[x.id];
+  if (!d) return '<div class="cook"><div class="t">' + kindTag(null) + '<span class="muted">(空格)</span></div></div>';
+  const k = S.settings.people / S.settings.basePeople;
+  let h = '<div class="cook"><div class="t">' + kindTag(d.kind) + '<span>' + esc(d.name) + '</span>' + (d.status === '候選' ? stTag('候選') : '') + '</div>';
+  if (withIngs) {
+    h += '<ul>' + d.ings.map(g => {
+      const it = m.item[g.i];
+      return '<li>' + esc(nm(it)) + ' ' + esc(ML.qtyText(it || {}, num(g.q * k))) + (it && it.supplier === 'stock' ? ' <span>(庫存)</span>' : '') + '</li>';
+    }).join('') + '</ul>';
+    const tips = [];
+    if (d.note) tips.push(d.note);
+    (d.risks || []).forEach(r => {
+      if (r === '葉菜變黃') tips.push('葉菜最後再炒,避免變黃');
+      else if (r === '炸物回軟') tips.push('炸物盡量晚一點炸,避免回軟');
+      else if (r === '魚刺') tips.push('注意魚刺');
+      else if (r === '出水') tips.push('容易出水,可以勾薄芡或分批做');
+      else tips.push(r);
+    });
+    if (tips.length) h += '<div class="tip">💡 ' + tips.map(esc).join(';') + '</div>';
+  }
+  return h + '</div>';
+}
+
+function reminders() {
+  const t = today();
+  let h = '';
+  ML.vegBatches(S, win()).forEach(b => {
+    const o = ML.orderOf(S, b);
+    if (o.status === 'draft' && b.orderDate === t) {
+      h += '<div class="note warn" data-a="openOrder" data-k="' + esc(b.key) + '">📣 <b>今天要叫菜:</b>' + esc(ML.supplierName(S, 'veg')) + ' '
+        + esc(ML.fmt(b.deliverDate)) + ' 送,涵蓋 ' + esc(b.coverDates.map(ML.fmt).join('、')) + ' ›</div>';
+    }
+  });
+  ['pork', 'chicken'].forEach(s => {
+    const un = ML.meatUncovered(S, s, win());
+    if (un.length && ML.diffDays(t, un[0]) <= 2) {
+      h += '<div class="note warn" data-a="tab" data-t="orders">🥩 <b>' + esc(ML.supplierName(S, s)) + ':</b>' + esc(ML.fmt(un[0])) + ' 起還沒叫貨(' + un.length + ' 天) ›</div>';
+    }
+  });
+  const n = orderIssues();
+  if (n) h += '<div class="note bad" data-a="tab" data-t="orders">⚠ 菜單改過,有 ' + n + ' 個叫貨品項要確認 ›</div>';
+  return h;
+}
+
+const TABS = {};
+TABS.today = function () {
+  const t = today();
+  setTitle('今日製作 ' + ML.fmt(t), false, '<button data-a="copyToday">📋 複製</button>');
+  const m = M();
+  const day = S.days[t];
+  let h = reminders();
+  if (!day) {
+    h += '<div class="card empty">今天還沒排菜<div class="row-b"><button class="btn pri" data-a="tab" data-t="week">去排菜單</button></div></div>';
+  } else {
+    h += '<div class="card"><h2>' + (day.type === 'nonrice' ? '非飯菜日' : '飯菜日') + '<span class="sp"></span><span class="muted small">以 ' + S.settings.people + ' 人估算</span></h2>';
+    h += day.dishes.map(x => dishBlock(m, x, true)).join('') + '</div>';
+  }
+  const tm = S.days[ML.addDays(t, 1)];
+  if (tm) {
+    h += '<div class="sec">明天 ' + esc(ML.fmt(ML.addDays(t, 1))) + '</div><div class="card">'
+      + tm.dishes.map(x => dishBlock(m, x, false)).join('') + '</div>';
+  }
+  const st = ML.stockUsage(S, [t]);
+  if (st.length) {
+    h += '<div class="sec">今天用到的庫存品</div><div class="card">' + st.map(u => '<div class="ol"><div class="n">' + esc(nm(u.item)) + '</div><div class="q">'
+      + esc(ML.qtyText(u.item, u.q)) + '</div></div>').join('') + '</div>';
+  }
+  return h;
+};
+
+// =====================================================================
+// 菜單(一週)
+// =====================================================================
+TABS.week = function () {
+  setTitle('一週菜單', false, '<button data-a="copyWeek">📋 週報</button>');
+  const m = M();
+  const t = today();
+  let h = '<div class="btns full" style="margin-bottom:12px"><button class="btn pri" data-a="drawWeek">🎲 抽一週</button><button class="btn" data-a="copyWeek">📋 複製本週菜單</button></div>';
+  win().forEach(d => {
+    const day = S.days[d];
+    const b = ML.vegBatch(S, d);
+    h += '<div class="card day' + (d === t ? ' today' : '') + '"><h2><span class="date">' + esc(ML.fmt(d)) + '</span>' + (d === t ? '<span class="pill main">今天</span>' : '');
+    h += '<span class="sp"></span>';
+    if (day) h += '<button class="type ' + day.type + '" data-a="dayType" data-d="' + d + '">' + (day.type === 'nonrice' ? '非飯菜日' : '飯菜日') + ' ▾</button>';
+    h += '<button class="icon" data-a="drawDay" data-d="' + d + '" title="整天重抽">🎲</button></h2>';
+    if (!day) {
+      h += '<div class="empty" style="padding:8px">還沒排菜</div>';
+    } else {
+      day.dishes.forEach((x, i) => {
+        const dish = x.id && m.dish[x.id];
+        h += '<div class="dish">' + kindTag(dish ? dish.kind : (x.slot === 'main' ? null : x.slot))
+          + '<div class="n" data-a="dishMenu" data-d="' + d + '" data-i="' + i + '">' + (dish ? esc(dish.name) + (dish.status === '候選' ? ' ' + stTag('候選') : '') : '<span class="muted">(空格,點一下選菜)</span>') + '</div>'
+          + '<button class="lock' + (x.locked ? ' on' : '') + '" data-a="lock" data-d="' + d + '" data-i="' + i + '">' + (x.locked ? '🔒' : '🔓') + '</button></div>';
+      });
+      const w = ML.dayWarnings(S, d);
+      if (w.length) h += '<ul class="warns">' + w.map(x => '<li class="' + x.level + '">' + esc(x.text) + '</li>').join('') + '</ul>';
+    }
+    if (b && b.dayNo === 0) h += '<div class="muted small" style="margin-top:6px">🚚 菜商送貨日</div>';
+    h += '</div>';
+  });
+  h += '<p class="muted small">🔒 鎖定的菜在重抽時不會被換掉。點菜名可以換一道、手動選或用已叫貨的食材換菜。</p>';
+  return h;
+};
+
+// =====================================================================
+// 叫貨
+// =====================================================================
+TABS.orders = function () {
+  setTitle('叫貨', false);
+  const dates = win();
+  let h = '<div class="sec">' + esc(ML.supplierName(S, 'veg')) + '(依叫貨排程自動計算)</div>';
+  ML.vegBatches(S, dates).forEach(b => {
+    const o = ML.orderOf(S, b);
+    const v = ML.orderView(S, o);
+    h += '<div class="card batch" data-a="openOrder" data-k="' + esc(b.key) + '"><div class="b"><div class="h">' + esc(ML.fmt(b.orderDate)) + ' 叫 → '
+      + esc(ML.fmt(b.deliverDate)) + ' 送</div><div class="s">涵蓋 ' + esc(b.coverDates.map(ML.fmt).join('、')) + ' · ' + v.lines.filter(L => L.final > 0).length + ' 項'
+      + (v.missing.length ? ' · ' + v.missing.length + ' 天未排菜' : '') + '</div></div><div class="pills">' + statusPill(o) + issuePills(v) + '</div><span class="go">›</span></div>';
+  });
+  ['pork', 'chicken'].forEach(s => {
+    h += '<div class="sec">' + esc(ML.supplierName(S, s)) + '(自己選日期,一次叫幾天的量)</div>';
+    const list = ML.meatOrders(S, s).filter(o => o.coverDates[o.coverDates.length - 1] >= dates[0]);
+    list.forEach(o => {
+      const v = ML.orderView(S, o);
+      h += '<div class="card batch" data-a="openOrder" data-k="' + esc(o.key) + '"><div class="b"><div class="h">' + esc(ML.coverText(o.coverDates)) + ' 用</div><div class="s">'
+        + o.coverDates.length + ' 天 · ' + v.lines.filter(L => L.final > 0).length + ' 項' + (v.missing.length ? ' · ' + v.missing.length + ' 天未排菜' : '')
+        + '</div></div><div class="pills">' + statusPill(o) + issuePills(v) + '</div><span class="go">›</span></div>';
+    });
+    const un = ML.meatUncovered(S, s, dates);
+    if (un.length) h += '<div class="note warn">還沒叫貨的日期:' + esc(un.map(ML.fmt).join('、')) + '</div>';
+    else if (!list.length) h += '<div class="muted small" style="margin:0 4px 10px">這 7 天沒有用到' + esc(ML.KIND_NAME[s]) + '或都已叫貨</div>';
+    h += '<button class="btn" data-a="newMeat" data-s="' + s + '">＋ 產生' + esc(ML.supplierName(S, s)) + '叫貨單</button>';
+  });
+  const st = ML.stockUsage(S, dates);
+  h += '<div class="sec">庫存品用量(這 7 天,不列入叫貨)</div><div class="card">';
+  h += st.length ? st.map(u => '<div class="ol"><div class="n">' + esc(nm(u.item)) + '<small>' + esc(u.src.map(x => ML.fmt(x.date) + ' ' + x.dish).filter((x, i, a) => a.indexOf(x) === i).join('、')) + '</small></div><div class="q">'
+    + esc(ML.qtyText(u.item, u.q)) + '</div></div>').join('') : '<div class="empty">沒有用到庫存品</div>';
+  h += '</div><p class="muted small">庫存不夠時,可以在菜商叫貨單用「＋ 加品項」請菜商代買。</p>';
+  return h;
+};
+
+const SUBS = {};
+SUBS.order = function () {
+  const o = findOrder(ui.sub.key);
+  if (!o) { ui.sub = null; return TABS[ui.tab](); }
+  const v = ML.orderView(S, o);
+  setTitle(orderTitle(o), true);
+  let h = '<div class="card"><div class="muted">' + (o.orderDate ? '叫貨日 ' + esc(ML.fmt(o.orderDate)) + ' · 送貨 ' + esc(ML.fmt(ML.addDays(o.orderDate, 1))) + '<br>' : '')
+    + '涵蓋 ' + esc(o.coverDates.map(ML.fmt).join('、')) + '</div><div style="margin-top:6px">' + statusPill(o) + ' ' + issuePills(v) + '</div></div>';
+  if (v.missing.length) h += '<div class="note warn">' + esc(v.missing.map(ML.fmt).join('、')) + ' 還沒排菜,這幾天的量還沒算進來</div>';
+  if (o.status !== 'draft' && v.adds) {
+    h += '<div class="note bad"><b>菜單改過,需要追加:</b><br>' + v.lines.filter(L => L.add).map(L => esc(L.item.name) + ' ' + esc(ML.qtyText(L.item, L.add))).join('、')
+      + '<div class="btns row-b"><button class="btn sm" data-a="copyOrder" data-m="add">📋 複製追加單</button><button class="btn sm line" data-a="lineOrder" data-m="add">LINE</button>'
+      + '<button class="btn sm" data-a="addSent">已追加</button></div></div>';
+  }
+  if (o.status !== 'draft' && v.extras) {
+    h += '<div class="note warn"><b>菜單改過,這些已叫的量用不到:</b><br>' + v.lines.filter(L => L.extra).map(L => esc(nm(L.item)) + ' ' + esc(ML.qtyText(L.item, L.extra))).join('、')
+      + '<br><span class="small">可以挪到其他天使用,或在菜單用「用已叫貨食材換菜」。</span><div class="btns row-b"><button class="btn sm" data-a="ackExtra">知道了</button></div></div>';
+  }
+  if (o.status === 'draft' && o.copied && o.copied !== ML.orderText(S, v, 'full')) {
+    h += '<div class="note warn">上次複製之後,菜單有改過,叫貨單已經自動更新。請重新複製。</div>';
+  }
+  h += '<div class="card">';
+  if (!v.lines.length) h += '<div class="empty">這批沒有需要叫的品項</div>';
+  const draft = o.status === 'draft';
+  v.lines.forEach(L => {
+    const sub = [];
+    if (nm(L.item) !== L.item.name) sub.push(nm(L.item));
+    if (L.manual) sub.push('手動加的品項');
+    else if (draft && L.override != null) sub.push('系統估算 ' + ML.qtyText(L.item, L.computed));
+    if (!draft && !L.sent) sub.push('原本沒叫');
+    const q = draft ? L.final : (L.sent || 0);   // 已叫貨:顯示實際叫的量,變動另外列出
+    h += '<div class="ol' + (L.short ? ' short' : '') + '" data-a="editLine" data-i="' + esc(L.item.id) + '"><div class="n">' + esc(L.item.name) + (L.short ? ' <span class="pill bad">缺貨</span>' : '')
+      + (sub.length ? '<small>' + esc(sub.join(' · ')) + '</small>' : '')
+      + (draft && L.stale ? '<small style="color:var(--warn)">⚠ 菜單改過:系統估算變成 ' + esc(ML.qtyText(L.item, L.computed)) + '</small>' : '')
+      + (L.add ? '<small style="color:var(--bad)">需追加 ' + esc(ML.qtyText(L.item, L.add)) + '</small>' : '')
+      + (L.extra ? '<small style="color:var(--warn)">用不到 ' + esc(ML.qtyText(L.item, L.extra)) + '</small>' : '')
+      + '</div><div class="q' + (q > 0 ? '' : ' zero') + '">' + esc(ML.qtyText(L.item, q)) + '</div></div>';
+  });
+  h += '<div class="row-b"><button class="btn sm" data-a="addLine">＋ 加品項</button></div></div>';
+  h += '<div class="sec">傳給' + esc(ML.supplierName(S, o.supplier)) + '的文字</div><pre class="txt">' + esc(ML.orderText(S, v, 'full')) + '</pre>';
+  h += '<div class="btns full row-b"><button class="btn" data-a="copyOrder" data-m="full">📋 複製</button><button class="btn line" data-a="lineOrder" data-m="full">傳到 LINE</button></div>';
+  h += '<div class="btns full row-b">';
+  if (o.status === 'draft') h += '<button class="btn pri" data-a="markSent">✓ 標記已叫貨</button>';
+  if (o.status === 'sent') h += '<button class="btn pri" data-a="markArrived">✓ 標記已到貨</button>';
+  if (o.status !== 'draft') h += '<button class="btn" data-a="unsend">改回未叫貨</button>';
+  if (o.supplier !== 'veg') h += '<button class="btn bad" data-a="delOrder">刪除這張</button>';
+  h += '</div><p class="muted small">點品項可以改數量、看是哪幾道菜用到的、標記缺貨。系統估算和你改的數量會分開保存。</p>';
+  return h;
+};
+
+// =====================================================================
+// 卡池
+// =====================================================================
+TABS.pool = function () {
+  setTitle('料理卡池', false, '<button data-a="newDish">＋ 新增</button>');
+  const f = ui.pool;
+  let h = '<div class="chips">' + [['all', '全部']].concat(KINDS.map(k => [k, ML.KIND_NAME[k]]))
+    .map(([k, n]) => '<button class="chip' + (f.kind === k ? ' on' : '') + '" data-a="poolKind" data-v="' + k + '">' + esc(n) + '</button>').join('') + '</div>';
+  h += '<div class="chips">' + [['all', '全部狀態']].concat(ML.STATUS.map(s => [s, s]))
+    .map(([k, n]) => '<button class="chip' + (f.status === k ? ' on' : '') + '" data-a="poolStatus" data-v="' + k + '">' + esc(n) + '</button>').join('') + '</div>';
+  h += '<input class="search" id="poolq" placeholder="搜尋菜名或食材" value="' + esc(f.q) + '">';
+  h += '<div class="card" id="poollist">' + poolList() + '</div>';
+  return h;
+};
+function poolList() {
+  const f = ui.pool;
+  const m = M();
+  const q = f.q.trim();
+  const list = S.dishes.filter(d => (f.kind === 'all' || d.kind === f.kind) && (f.status === 'all' || d.status === f.status)
+    && (!q || d.name.indexOf(q) >= 0 || d.ings.some(g => m.item[g.i] && (m.item[g.i].name.indexOf(q) >= 0 || nm(m.item[g.i]).indexOf(q) >= 0))));
+  list.sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || ML.STATUS.indexOf(a.status) - ML.STATUS.indexOf(b.status));
+  if (!list.length) return '<div class="empty">沒有符合的料理</div>';
+  return '<div class="muted small" style="margin-bottom:4px">' + list.length + ' 道</div>' + list.map(d => '<div class="li' + (d.status === '停用' ? ' off' : '') + '" data-a="editDish" data-id="' + d.id + '">' + kindTag(d.kind)
+    + '<div class="n">' + esc(d.name) + '<small>' + esc([d.method, '醬色' + d.sauce, d.flavor].filter(Boolean).join(' · ')) + ' · '
+    + esc(d.ings.map(g => nm(m.item[g.i])).join('、')) + '</small></div>' + stTag(d.status) + '</div>').join('');
+}
+
+SUBS.dish = function () {
+  const d = ui.draft;
+  setTitle(ui.sub.isNew ? '新增料理' : '編輯料理', true);
+  const m = M();
+  let h = '<div class="card">';
+  h += '<div class="f"><label>菜名</label><input id="dn" value="' + esc(d.name) + '"></div>';
+  h += '<div class="f"><label>類別(依主體食材:只有豬、雞、魚是主菜,肉片只是配料的算蔬菜)</label><select id="dk">'
+    + KINDS.map(k => '<option value="' + k + '"' + (d.kind === k ? ' selected' : '') + '>' + esc(ML.KIND_NAME[k]) + '</option>').join('') + '</select></div>';
+  h += '<div class="f"><label>狀態</label><div class="seg">' + ML.STATUS.map(s => '<button data-a="dStatus" data-v="' + s + '"' + (d.status === s ? ' class="on"' : '') + '>' + s + '</button>').join('') + '</div>'
+    + '<div class="muted small" style="margin-top:4px">常用 / 輪替會被自動抽到;候選只能手動選;停用不會出現</div></div>';
+  h += '<div class="f"><label>食材(' + S.settings.basePeople + ' 人份原料量)</label><div id="ings">';
+  d.ings.forEach((g, i) => {
+    const it = m.item[g.i];
+    h += '<div class="ing"><select data-ing="' + i + '">' + itemOptions(g.i) + '</select><input type="number" inputmode="decimal" step="0.1" min="0" data-q="' + i + '" value="' + esc(g.q) + '">'
+      + '<span class="u">' + esc(it ? it.unit : '') + '</span><button data-a="delIng" data-i="' + i + '">✕</button></div>';
+  });
+  h += '</div><button class="btn sm" data-a="addIng">＋ 加食材</button></div>';
+  h += '<div class="f"><label>主體食材(同一天不會出現兩道主體食材一樣的菜)</label><select id="dm">'
+    + d.ings.map(g => '<option value="' + esc(g.i) + '"' + (d.main === g.i ? ' selected' : '') + '>' + esc(nm(m.item[g.i])) + '</option>').join('') + '</select></div>';
+  h += '<div class="f"><label>烹調方式</label><select id="dmt">' + METHODS.map(x => '<option' + (d.method === x ? ' selected' : '') + '>' + x + '</option>').join('') + '</select></div>';
+  h += '<div class="f"><label>醬色</label><div class="seg">' + ['淺', '中', '深'].map(s => '<button data-a="dSauce" data-v="' + s + '"' + (d.sauce === s ? ' class="on"' : '') + '>' + s + '</button>').join('') + '</div></div>';
+  h += '<div class="f"><label>口味(例如 糖醋、茄汁、咖哩;同一天重複會提醒,一般家常可以空白)</label><input id="df" value="' + esc(d.flavor) + '"></div>';
+  h += '<div class="f"><label>注意事項</label><div class="checks">' + RISKS.map(r => '<label><input type="checkbox" data-risk="' + r + '"' + (d.risks.indexOf(r) >= 0 ? ' checked' : '') + '>' + r + '</label>').join('') + '</div></div>';
+  h += '<div class="f"><label>備註(會顯示在今日製作)</label><textarea id="dnote">' + esc(d.note) + '</textarea></div>';
+  h += '</div><div class="btns full"><button class="btn pri" data-a="saveDish">儲存</button></div>';
+  if (!ui.sub.isNew) {
+    h += '<div class="btns full row-b"><button class="btn" data-a="copyDish">複製成新料理</button><button class="btn bad" data-a="delDish">刪除</button></div>';
+  }
+  return h;
+};
+function itemOptions(sel) {
+  const groups = {};
+  S.items.forEach(it => { (groups[it.cat] = groups[it.cat] || []).push(it); });
+  let h = sel ? '' : '<option value="">選擇食材…</option>';
+  Object.keys(groups).forEach(c => {
+    h += '<optgroup label="' + esc(c) + '">' + groups[c].map(it => '<option value="' + esc(it.id) + '"' + (it.id === sel ? ' selected' : '') + '>'
+      + esc(it.name) + (it.std ? '(' + esc(it.std) + ')' : '') + (it.unsure ? ' ❓' : '') + '</option>').join('') + '</optgroup>';
+  });
+  return h;
+}
+/** 把畫面上的輸入讀回草稿(切換狀態、加食材前先讀,才不會弄丟正在打的字)。 */
+function readDish() {
+  const d = ui.draft;
+  if (!d || !$('#dn')) return d;
+  d.name = $('#dn').value.trim();
+  d.kind = $('#dk').value;
+  d.method = $('#dmt').value;
+  d.flavor = $('#df').value.trim();
+  d.note = $('#dnote').value.trim();
+  d.ings.forEach((g, i) => {
+    const s = document.querySelector('[data-ing="' + i + '"]');
+    const q = document.querySelector('[data-q="' + i + '"]');
+    if (s && s.value) g.i = s.value;
+    if (q) g.q = parseFloat(q.value) || 0;
+  });
+  const mm = $('#dm');
+  d.main = mm && d.ings.some(g => g.i === mm.value) ? mm.value : (d.ings[0] ? d.ings[0].i : null);
+  d.risks = Array.from(document.querySelectorAll('[data-risk]')).filter(x => x.checked).map(x => x.dataset.risk);
+  return d;
+}
+
+// =====================================================================
+// 更多:品項、歷史、設定、備份
+// =====================================================================
+TABS.more = function () {
+  setTitle('更多', false);
+  const unsure = S.items.filter(i => i.unsure).length;
+  return '<div class="card menu-list">'
+    + '<div class="li" data-a="sub" data-v="items"><div class="n">🥬 品項資料庫<small>' + S.items.length + ' 項' + (unsure ? ',' + unsure + ' 項品名待確認' : '') + '</small></div><span class="go">›</span></div>'
+    + '<div class="li" data-a="sub" data-v="history"><div class="n">🗂 歷史紀錄<small>過去的菜單和叫貨單</small></div><span class="go">›</span></div>'
+    + '<div class="li" data-a="sub" data-v="settings"><div class="n">⚙ 設定<small>人數、排菜規則、叫貨排程、供應商名稱</small></div><span class="go">›</span></div>'
+    + '<div class="li" data-a="sub" data-v="backup"><div class="n">💾 備份 / 還原<small>換手機或重設時使用</small></div><span class="go">›</span></div>'
+    + '</div><p class="muted small">資料只存在這支手機裡。</p>';
+};
+
+SUBS.items = function () {
+  setTitle('品項資料庫', true, '<button data-a="newItem">＋ 新增</button>');
+  return '<input class="search" id="itemq" placeholder="搜尋品項" value="' + esc(ui.itemQ) + '"><div id="itemlist">' + itemList() + '</div>';
+};
+function itemList() {
+  const q = ui.itemQ.trim();
+  const groups = {};
+  S.items.filter(it => !q || it.name.indexOf(q) >= 0 || (it.std || '').indexOf(q) >= 0).forEach(it => { (groups[it.cat] = groups[it.cat] || []).push(it); });
+  const cats = Object.keys(groups);
+  if (!cats.length) return '<div class="card empty">沒有符合的品項</div>';
+  return cats.map(c => '<div class="sec">' + esc(c) + '</div><div class="card">' + groups[c].map(it => '<div class="li" data-a="editItem" data-id="' + esc(it.id) + '"><div class="n">'
+    + esc(it.name) + (it.std ? ' <span class="muted">(' + esc(it.std) + ')</span>' : '') + (it.unsure ? ' <span class="pill warn">待確認</span>' : '')
+    + '<small>' + esc([ML.supplierName(S, it.supplier), '單位 ' + it.unit, '耐放 ' + it.keep, it.note].filter(Boolean).join(' · ')) + '</small></div><span class="go">›</span></div>').join('') + '</div>').join('');
+}
+SUBS.item = function () {
+  const it = ui.draft;
+  setTitle(ui.sub.isNew ? '新增品項' : '編輯品項', true);
+  const cats = [];
+  S.items.forEach(x => { if (cats.indexOf(x.cat) < 0) cats.push(x.cat); });
+  let h = '<div class="card">';
+  h += '<div class="f"><label>原始品名(叫貨單上用這個,和供應商的單子一樣)</label><input id="in" value="' + esc(it.name) + '"></div>';
+  h += '<div class="f"><label>標準名稱(App 畫面顯示;一樣就空白)</label><input id="is" value="' + esc(it.std || '') + '"></div>';
+  h += '<div class="f"><label>類別</label><select id="ic">' + cats.map(c => '<option' + (it.cat === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select></div>';
+  h += '<div class="f"><label>向誰叫貨</label><select id="isp">' + ['veg', 'pork', 'chicken', 'stock'].map(s => '<option value="' + s + '"' + (it.supplier === s ? ' selected' : '') + '>'
+    + esc(ML.supplierName(S, s)) + (s === 'stock' ? '(不叫貨)' : '') + '</option>').join('') + '</select></div>';
+  h += '<div class="f"><label>單位</label><input id="iu" value="' + esc(it.unit) + '"></div>';
+  h += '<div class="f"><label>叫貨級距(例如 0.5 = 以半斤為單位進位)</label><input id="ist" type="number" inputmode="decimal" step="0.5" min="0.1" value="' + esc(it.step) + '"></div>';
+  h += '<div class="f"><label>耐放度(低 = 葉菜,排在送貨當天最好)</label><div class="seg">' + ['低', '中', '高'].map(s => '<button data-a="iKeep" data-v="' + s + '"' + (it.keep === s ? ' class="on"' : '') + '>' + s + '</button>').join('') + '</div></div>';
+  h += '<div class="f checks"><label><input type="checkbox" id="ig"' + (it.green ? ' checked' : '') + '>綠色青菜</label><label><input type="checkbox" id="iun"' + (it.unsure ? ' checked' : '') + '>品名待確認</label></div>';
+  h += '<div class="f"><label>備註</label><input id="ino" value="' + esc(it.note || '') + '"></div>';
+  h += '</div><div class="btns full"><button class="btn pri" data-a="saveItem">儲存</button>' + (ui.sub.isNew ? '' : '<button class="btn bad" data-a="delItem">刪除</button>') + '</div>';
+  return h;
+};
+function readItem() {
+  const it = ui.draft;
+  if (!$('#in')) return it;
+  it.name = $('#in').value.trim();
+  it.std = $('#is').value.trim();
+  it.cat = $('#ic').value;
+  it.supplier = $('#isp').value;
+  it.unit = $('#iu').value.trim() || '斤';
+  it.step = parseFloat($('#ist').value) || 0.5;
+  it.green = $('#ig').checked;
+  it.unsure = $('#iun').checked;
+  it.note = $('#ino').value.trim();
+  return it;
+}
+
+SUBS.history = function () {
+  setTitle('歷史紀錄', true);
+  const m = M();
+  const t = today();
+  const days = Object.keys(S.days).filter(d => d < t).sort().reverse();
+  let h = '<div class="sec">過去的菜單</div>';
+  if (!days.length) h += '<div class="card empty">還沒有紀錄</div>';
+  else h += '<div class="card">' + days.slice(0, 60).map(d => {
+    const day = S.days[d];
+    return '<div class="li"><div class="n"><b>' + esc(ML.fmt(d)) + '</b>' + (day.type === 'nonrice' ? ' <span class="pill">非飯菜日</span>' : '')
+      + '<small>' + esc(day.dishes.map(x => x.id && m.dish[x.id] ? m.dish[x.id].name : '—').join('、')) + '</small></div></div>';
+  }).join('') + '</div>';
+  const sent = Object.keys(S.orders).map(k => S.orders[k]).filter(o => o.status !== 'draft').sort((a, b) => (a.coverDates[0] < b.coverDates[0] ? 1 : -1));
+  h += '<div class="sec">叫貨紀錄</div>';
+  if (!sent.length) h += '<div class="card empty">還沒有叫貨紀錄</div>';
+  else h += '<div class="card">' + sent.slice(0, 60).map(o => '<div class="li" data-a="openOrder" data-k="' + esc(o.key) + '"><div class="n">' + esc(orderTitle(o))
+    + '<small>' + Object.keys(o.sentFinal).length + ' 項 · ' + (o.status === 'arrived' ? '已到貨' : '已叫貨') + '</small></div><span class="go">›</span></div>').join('') + '</div>';
+  return h;
+};
+
+SUBS.settings = function () {
+  setTitle('設定', true);
+  const st = S.settings, r = st.rules;
+  const numRow = (key, name, desc, val, step) => '<div class="set"><div class="n">' + esc(name) + (desc ? '<small>' + esc(desc) + '</small>' : '') + '</div>'
+    + '<input type="number" inputmode="decimal" step="' + (step || 1) + '" min="0" data-set="' + key + '" value="' + esc(val) + '"></div>';
+  let h = '<div class="sec">人數</div><div class="card">' + numRow('people', '估算人數', '叫貨量依這個人數換算(料理用量是 ' + st.basePeople + ' 人份)', st.people) + '</div>';
+  h += '<div class="sec">排菜規則</div><div class="card">'
+    + numRow('rules.maxFish', '每天魚料理上限', '', r.maxFish)
+    + numRow('rules.maxFried', '每天炸物上限', '', r.maxFried)
+    + numRow('rules.maxSameMeat', '同一種肉每天上限', '豬肉或雞肉', r.maxSameMeat)
+    + numRow('rules.maxDark', '深色醬汁超過幾道就提醒', '', r.maxDark)
+    + numRow('rules.nonriceCount', '非飯菜日幾道餐點', '', r.nonriceCount)
+    + numRow('rules.cooldown.常用', '常用菜幾天內不重複', '', r.cooldown['常用'])
+    + numRow('rules.cooldown.輪替', '輪替菜幾天內不重複', '', r.cooldown['輪替'])
+    + numRow('rules.cooldown.nonrice', '非飯菜日餐點幾天內不重複', '', r.cooldown.nonrice)
+    + '<div class="set"><div class="n">蔬菜至少一道綠色青菜<small>沒有時提醒</small></div><input type="checkbox" data-set="rules.needGreen"' + (r.needGreen ? ' checked' : '') + ' style="width:22px;height:22px"></div>'
+    + '</div>';
+  h += '<div class="sec">' + esc(ML.supplierName(S, 'veg')) + '叫貨排程(隔天送貨)</div><div class="card">';
+  st.vegSchedule.forEach((e, i) => {
+    h += '<div class="sched">星期<select data-sch="' + i + '">' + ML.WEEK.map((w, k) => '<option value="' + k + '"' + (e.order === k ? ' selected' : '') + '>' + w + '</option>').join('')
+      + '</select>叫,涵蓋<span class="wd">' + ML.WEEK.map((w, k) => '<button data-a="schDay" data-i="' + i + '" data-v="' + k + '"' + (e.covers.indexOf(k) >= 0 ? ' class="on"' : '') + '>' + w + '</button>').join('')
+      + '</span><button class="icon" data-a="schDel" data-i="' + i + '">✕</button></div>';
+  });
+  const cnt = [0, 0, 0, 0, 0, 0, 0];
+  st.vegSchedule.forEach(e => e.covers.forEach(k => { cnt[k]++; }));
+  const miss = cnt.map((c, k) => (c === 0 ? ML.WEEK[k] : null)).filter(Boolean);
+  const dup = cnt.map((c, k) => (c > 1 ? ML.WEEK[k] : null)).filter(Boolean);
+  if (miss.length) h += '<div class="note warn">星期' + miss.join('、') + ' 沒有任何一批涵蓋</div>';
+  if (dup.length) h += '<div class="note warn">星期' + dup.join('、') + ' 被兩批涵蓋,只會算在第一批</div>';
+  h += '<button class="btn sm" data-a="schAdd">＋ 加一批</button></div>';
+  h += '<div class="sec">供應商名稱</div><div class="card">' + ['veg', 'pork', 'chicken'].map(s => '<div class="set"><div class="n">' + esc(ML.KIND_NAME[s] === '蔬菜' ? '菜商' : ML.KIND_NAME[s] + '商') + '</div>'
+    + '<input style="width:140px;text-align:left" data-sup="' + s + '" value="' + esc(st.suppliers[s]) + '"></div>').join('') + '</div>';
+  return h;
+};
+
+SUBS.backup = function () {
+  setTitle('備份 / 還原', true);
+  return '<div class="card"><h2>備份</h2><p class="muted">把所有資料(卡池、品項、菜單、叫貨紀錄、設定)複製成一段文字,可以貼到 LINE 的 Keep 或記事本保存。</p>'
+    + '<button class="btn pri" data-a="exportData">📋 複製備份</button></div>'
+    + '<div class="card"><h2>還原</h2><p class="muted">貼上之前複製的備份文字。目前的資料會被取代。</p><textarea class="inp" id="imp" style="min-height:100px"></textarea>'
+    + '<div class="row-b"><button class="btn" data-a="importData">還原</button></div></div>'
+    + '<div class="card"><h2>重設</h2><p class="muted">回到初始卡池和品項,菜單和叫貨紀錄全部清空。</p><button class="btn bad" data-a="resetData">重設為初始資料</button></div>';
+};
+
+// =====================================================================
+// 底部面板
+// =====================================================================
+function sheet(html) {
+  $('#panel').innerHTML = html;
+  $('#sheet').classList.remove('hidden');
+  $('#panel').scrollTop = 0;
+}
+function closeSheet() { $('#sheet').classList.add('hidden'); $('#panel').innerHTML = ''; ui.sheet = null; }
+/** 確認對話框:buttons = [[文字, 動作函式, 'pri' | 'bad' | '']] */
+function ask(title, msg, buttons) {
+  ui.sheet = { buttons };
+  sheet('<h3>' + esc(title) + '</h3>' + (msg ? '<p class="muted">' + msg + '</p>' : '') + '<div class="btns full">'
+    + buttons.map((b, i) => '<button class="btn ' + (b[2] || '') + '" data-a="askBtn" data-i="' + i + '">' + esc(b[0]) + '</button>').join('')
+    + '<button class="btn" data-a="closeSheet">取消</button></div>');
+}
+
+function dishMenu(date, i) {
+  const m = M();
+  const x = S.days[date].dishes[i];
+  const d = x.id && m.dish[x.id];
+  const have = Object.keys(ML.orderedItems(S, date)).length > 0;
+  ui.sheet = { date, i };
+  sheet('<h3>' + esc(ML.fmt(date)) + ' · ' + esc(d ? d.name : '空格') + '</h3><div class="menu">'
+    + '<button data-a="redraw">🎲 換一道<small>隨機換一道符合規則的菜,其他菜不動</small></button>'
+    + '<button data-a="pickMenu">✋ 手動選擇<small>從卡池挑一道(候選菜也可以選)</small></button>'
+    + (have ? '<button data-a="pickMenu" data-o="1">🧺 用已叫貨的食材換菜<small>只列出這批已叫貨食材做得出來的菜</small></button>' : '')
+    + (d ? '<button data-a="lockOne">' + (x.locked ? '🔓 解除鎖定' : '🔒 鎖定這道') + '</button>' : '')
+    + (d ? '<button data-a="viewDish">📄 看這道菜的食材 / 編輯</button>' : '')
+    + '</div>');
+}
+function pickSheet(onlyOrdered) {
+  const { date, i } = ui.sheet;
+  ui.sheet.only = onlyOrdered;
+  ui.sheet.q = '';
+  sheet('<h3>' + (onlyOrdered ? '用已叫貨的食材換菜' : '選一道菜') + '</h3><input class="search" id="pickq" placeholder="搜尋"><div id="picklist">' + pickList() + '</div>');
+}
+function pickList() {
+  const { date, i, only, q } = ui.sheet;
+  const list = ML.candidates(S, date, i, only).filter(c => !q || c.dish.name.indexOf(q) >= 0);
+  if (!list.length) return '<div class="empty">' + (only ? '已叫貨的食材做不出其他菜' : '沒有符合的菜') + '</div>';
+  return list.map(c => '<div class="pick' + (c.reason ? ' no' : '') + '" data-a="pickDish" data-id="' + c.dish.id + '">' + kindTag(c.dish.kind) + '<div class="n">' + esc(c.dish.name)
+    + (c.reason ? '<small>' + esc(c.reason) + '</small>' : '') + '</div>' + stTag(c.dish.status) + '</div>').join('');
+}
+
+function lineSheet(itemId) {
+  const o = findOrder(ui.sub.key);
+  const v = ML.orderView(S, o);
+  const L = v.lines.find(x => x.item.id === itemId);
+  if (!L) return;
+  ui.sheet = { itemId };
+  let h = '<h3>' + esc(L.item.name) + (nm(L.item) !== L.item.name ? ' <span class="muted">(' + esc(nm(L.item)) + ')</span>' : '') + '</h3>';
+  if (L.src.length) {
+    h += '<div class="muted small" style="margin-bottom:8px">用到的菜:<br>' + L.src.map(s => esc(ML.fmt(s.date) + ' ' + s.dish + ' ' + ML.qtyText(L.item, num(s.q)))).join('<br>')
+      + '<br>合計 ' + esc(ML.qtyText(L.item, num(L.src.reduce((a, s) => a + s.q, 0)))) + ' → 進位後 ' + esc(ML.qtyText(L.item, L.computed)) + '</div>';
+  }
+  const draft = o.status === 'draft';
+  h += '<div class="f"><label>' + (draft ? '要叫的量' : '實際叫的量') + '(' + esc(L.item.unit) + ')</label><input class="inp" id="lq" type="number" inputmode="decimal" step="'
+    + (L.item.step || 0.5) + '" min="0" value="' + esc(draft ? L.final : (L.sent || 0)) + '"></div>';
+  h += '<div class="btns full"><button class="btn pri" data-a="saveLine">儲存</button>';
+  if (draft && L.override != null && !L.manual) h += '<button class="btn" data-a="clearLine">採用系統估算 ' + esc(ML.qtyText(L.item, L.computed)) + '</button>';
+  h += '</div><div class="btns full row-b">';
+  if (!draft) h += '<button class="btn' + (L.short ? '' : ' bad') + '" data-a="shortLine">' + (L.short ? '取消缺貨' : '標記缺貨') + '</button>';
+  else h += '<button class="btn bad" data-a="delLine">不叫這項</button>';
+  h += '</div>';
+  sheet(h);
+}
+
+// =====================================================================
+// 動作
+// =====================================================================
+const A = {};
+A.tab = el => { ui.tab = el.dataset.t; ui.sub = null; closeSheet(); render(); $('#main').scrollTop = 0; };
+A.back = () => back();
+A.closeSheet = () => closeSheet();
+A.askBtn = el => { const f = ui.sheet.buttons[+el.dataset.i][1]; closeSheet(); f(); };
+A.sub = el => { ui.sub = { type: el.dataset.v }; render(); };
+
+// 今日 / 週報
+A.copyToday = () => {
+  const t = today();
+  const day = S.days[t];
+  if (!day) return toast('今天還沒排菜');
+  const m = M();
+  copyText(ML.fmt(t) + ' 員工餐\n' + day.dishes.map(x => x.id && m.dish[x.id] ? m.dish[x.id].name : '').filter(Boolean).join('\n'));
+};
+A.copyWeek = () => {
+  const r = ML.weekReport(S, win());
+  if (!r) return toast('這週還沒排菜');
+  copyText(r, '已複製本週菜單');
+};
+
+// 菜單
+A.drawWeek = () => {
+  const dates = win();
+  const go = () => { ML.drawWeek(S, dates, Math.random); afterMenuChange(dates); toast('已抽好 7 天的菜單'); };
+  if (dates.some(d => S.days[d])) ask('重抽這 7 天?', '已經排好的菜會重抽,<b>鎖定的菜會保留</b>。飯菜日 / 非飯菜日不變。', [['重抽', go, 'pri']]);
+  else go();
+};
+A.drawDay = el => {
+  const d = el.dataset.d;
+  const go = () => { ML.drawDay(S, d, Math.random); afterMenuChange([d]); };
+  if (S.days[d]) ask(ML.fmt(d) + ' 整天重抽?', '鎖定的菜會保留。', [['重抽', go, 'pri']]);
+  else go();
+};
+A.dayType = el => {
+  const d = el.dataset.d;
+  const day = S.days[d];
+  const to = day.type === 'nonrice' ? 'rice' : 'nonrice';
+  ask(ML.fmt(d) + ' 改為' + (to === 'rice' ? '飯菜日' : '非飯菜日') + '?', '這天的菜會整天換成' + (to === 'rice' ? '飯菜日(3 主菜、2 蔬菜、1 蛋)' : '非飯菜日餐點') + ',叫貨單會自動重算。',
+    [['改為' + (to === 'rice' ? '飯菜日' : '非飯菜日'), () => { ML.setDayType(S, d, to, Math.random); afterMenuChange([d]); }, 'pri']]);
+};
+A.lock = el => {
+  const x = S.days[el.dataset.d].dishes[+el.dataset.i];
+  if (!x.id) return;
+  x.locked = !x.locked;
+  save();
+  rerender();
+};
+A.dishMenu = el => dishMenu(el.dataset.d, +el.dataset.i);
+A.redraw = () => {
+  const { date, i } = ui.sheet;
+  closeSheet();
+  ML.redrawSlot(S, date, i, Math.random);
+  afterMenuChange([date]);
+};
+A.pickMenu = el => pickSheet(!!el.dataset.o);
+A.pickDish = el => {
+  const { date, i } = ui.sheet;
+  const id = el.dataset.id;
+  const c = ML.candidates(S, date, i, ui.sheet.only).find(x => x.dish.id === id);
+  const go = () => { ML.setDish(S, date, i, id); afterMenuChange([date]); };
+  closeSheet();
+  if (c && c.reason) ask('仍要選這道?', esc(c.dish.name) + ':' + esc(c.reason), [['仍要選', go, 'pri']]);
+  else go();
+};
+A.lockOne = () => {
+  const { date, i } = ui.sheet;
+  const x = S.days[date].dishes[i];
+  x.locked = !x.locked;
+  closeSheet();
+  save();
+  rerender();
+};
+A.viewDish = () => {
+  const { date, i } = ui.sheet;
+  const id = S.days[date].dishes[i].id;
+  closeSheet();
+  openDish(id);
+};
+
+// 叫貨
+A.openOrder = el => {
+  ui.sub = { type: 'order', key: el.dataset.k, from: ui.sub && ui.sub.type === 'history' ? 'history' : null };
+  closeSheet();
+  render();
+  $('#main').scrollTop = 0;
+};
+A.newMeat = el => {
+  const s = el.dataset.s;
+  const dates = win();
+  const un = ML.meatUncovered(S, s, dates);
+  const from = un[0] || dates[0];
+  const to = un.filter(d => ML.diffDays(from, d) <= 3).pop() || from;
+  const opts = sel => dates.map(d => '<option value="' + d + '"' + (d === sel ? ' selected' : '') + '>' + esc(ML.fmt(d)) + '</option>').join('');
+  ui.sheet = { s };
+  sheet('<h3>產生' + esc(ML.supplierName(S, s)) + '叫貨單</h3><p class="muted">選這張叫貨單要涵蓋的日期(一次叫三、四天的量)。已經叫過的日期會自動跳過。</p>'
+    + '<div class="f"><label>從</label><select class="inp" id="mf">' + opts(from) + '</select></div><div class="f"><label>到</label><select class="inp" id="mt">' + opts(to) + '</select></div>'
+    + '<div class="btns full"><button class="btn pri" data-a="createMeat">產生</button><button class="btn" data-a="closeSheet">取消</button></div>');
+};
+A.createMeat = () => {
+  const f = $('#mf').value, t = $('#mt').value;
+  if (t < f) return toast('結束日期要在開始日期之後');
+  const o = ML.createMeatOrder(S, ui.sheet.s, f, t);
+  closeSheet();
+  if (!o) return toast('這些日期都已經有叫貨單了');
+  save();
+  ui.sub = { type: 'order', key: o.key };
+  render();
+};
+function curOrder() { return findOrder(ui.sub.key); }
+function orderAction(f) { const o = curOrder(); f(o); save(); rerender(); }
+A.copyOrder = el => {
+  const o = curOrder();
+  const v = ML.orderView(S, o);
+  const t = ML.orderText(S, v, el.dataset.m);
+  if (el.dataset.m === 'full' && o.status === 'draft') { ML.saveOrder(S, o).copied = t; save(); rerender(); }
+  copyText(t, '已複製,貼到 LINE 給' + ML.supplierName(S, o.supplier));
+  if (el.dataset.m === 'full' && o.status === 'draft') askSent();
+};
+A.lineOrder = el => {
+  const o = curOrder();
+  const v = ML.orderView(S, o);
+  const t = ML.orderText(S, v, el.dataset.m);
+  if (el.dataset.m === 'full' && o.status === 'draft') { ML.saveOrder(S, o).copied = t; save(); rerender(); }
+  shareLine(t);
+  if (el.dataset.m === 'full' && o.status === 'draft') setTimeout(askSent, 600);
+};
+function askSent() {
+  ask('已經傳給' + ML.supplierName(S, curOrder().supplier) + '了嗎?', '標記「已叫貨」之後,菜單再改會自動提示要追加或用不到的品項。',
+    [['✓ 標記已叫貨', () => { orderAction(o => ML.markSent(S, o, today())); toast('已標記為已叫貨'); }, 'pri']]);
+}
+A.markSent = () => orderAction(o => ML.markSent(S, o, today()));
+A.markArrived = () => orderAction(o => { o.status = 'arrived'; });
+A.unsend = () => ask('改回未叫貨?', '缺貨標記會清掉,叫貨單會回到依菜單自動計算。', [['改回', () => orderAction(o => ML.unsend(S, o)), 'bad']]);
+A.addSent = () => { orderAction(o => ML.markAddSent(S, o)); toast('已把追加的量算進已叫貨'); };
+A.ackExtra = () => orderAction(o => ML.ackExtra(S, o));
+A.delOrder = () => ask('刪除這張叫貨單?', '', [['刪除', () => { delete S.orders[ui.sub.key]; ui.sub = null; save(); render(); }, 'bad']]);
+A.editLine = el => lineSheet(el.dataset.i);
+A.saveLine = () => {
+  const q = parseFloat($('#lq').value);
+  const id = ui.sheet.itemId;
+  closeSheet();
+  if (isNaN(q) || q < 0) return toast('請輸入數量');
+  orderAction(o => {
+    if (o.status !== 'draft') { o.sentFinal[id] = q; return; }   // 已叫貨:改的是實際叫的量
+    const L = ML.orderView(S, o).lines.find(x => x.item.id === id);
+    if (L && !L.manual && q === L.computed) ML.acceptComputed(S, o, id);
+    else ML.setOverride(S, o, id, q);
+  });
+};
+A.clearLine = () => { const id = ui.sheet.itemId; closeSheet(); orderAction(o => ML.acceptComputed(S, o, id)); };
+A.delLine = () => { const id = ui.sheet.itemId; closeSheet(); orderAction(o => ML.removeLine(S, o, id)); };
+A.shortLine = () => {
+  const id = ui.sheet.itemId;
+  closeSheet();
+  orderAction(o => { if (o.short[id]) delete o.short[id]; else o.short[id] = true; });
+  const o = curOrder();
+  if (o.short[id]) {
+    const m = M();
+    const used = [];
+    o.coverDates.forEach(d => (S.days[d] ? S.days[d].dishes : []).forEach(x => {
+      const dish = x.id && m.dish[x.id];
+      if (dish && dish.ings.some(g => g.i === id)) used.push(ML.fmt(d) + ' ' + dish.name);
+    }));
+    if (used.length) ask('缺貨會影響這些菜', esc(used.join('、')) + '<br>可以到「菜單」點菜名,換一道或用已叫貨的食材換菜。',
+      [['去菜單', () => { ui.tab = 'week'; ui.sub = null; render(); }, 'pri']]);
+  }
+};
+A.addLine = () => {
+  const o = curOrder();
+  ui.sheet = {};
+  const opts = S.items.filter(it => it.supplier === o.supplier || (o.supplier === 'veg' && it.supplier === 'stock'));
+  sheet('<h3>加品項</h3><div class="f"><label>品項</label><select class="inp" id="ai"><option value="">選擇…</option>'
+    + opts.map(it => '<option value="' + esc(it.id) + '">' + esc(it.name) + (it.supplier === 'stock' ? '(庫存品,請菜商代買)' : '') + '</option>').join('') + '</select></div>'
+    + '<div class="f"><label>數量</label><input class="inp" id="aq" type="number" inputmode="decimal" step="0.5" min="0"></div>'
+    + '<div class="btns full"><button class="btn pri" data-a="saveAdd">加入</button><button class="btn" data-a="closeSheet">取消</button></div>');
+};
+A.saveAdd = () => {
+  const id = $('#ai').value, q = parseFloat($('#aq').value);
+  if (!id || !(q > 0)) return toast('請選品項並輸入數量');
+  closeSheet();
+  orderAction(o => {
+    const L = ML.orderView(S, o).lines.find(x => x.item.id === id);
+    if (o.status !== 'draft') {   // 已叫貨後再加 = 追加叫貨
+      o.sentFinal[id] = num((o.sentFinal[id] || 0) + q);
+      if (!L) ML.addExtra(S, o, id, q);
+    } else if (L && !L.manual) ML.setOverride(S, o, id, num(L.final + q));
+    else ML.addExtra(S, o, id, q);
+  });
+};
+
+// 卡池
+A.poolKind = el => { ui.pool.kind = el.dataset.v; rerender(); };
+A.poolStatus = el => { ui.pool.status = el.dataset.v; rerender(); };
+A.newDish = () => {
+  const kind = ui.pool.kind !== 'all' ? ui.pool.kind : 'veg';
+  ui.draft = { id: null, name: '', kind, status: '候選', method: '炒', sauce: '淺', flavor: '', risks: [], note: '', ings: [], main: null };
+  ui.sub = { type: 'dish', isNew: true };
+  render();
+  $('#main').scrollTop = 0;
+};
+function openDish(id) {
+  const d = S.dishes.find(x => x.id === id);
+  if (!d) return;
+  ui.draft = JSON.parse(JSON.stringify(d));
+  ui.sub = { type: 'dish', id, isNew: false };
+  render();
+  $('#main').scrollTop = 0;
+}
+A.editDish = el => openDish(el.dataset.id);
+A.dStatus = el => { readDish(); ui.draft.status = el.dataset.v; rerender(); };
+A.dSauce = el => { readDish(); ui.draft.sauce = el.dataset.v; rerender(); };
+A.addIng = () => {
+  readDish();
+  ui.sheet = {};
+  sheet('<h3>加食材</h3><div class="f"><select class="inp" id="ni">' + itemOptions(null) + '</select></div>'
+    + '<div class="f"><label>' + S.settings.basePeople + ' 人份用量</label><input class="inp" id="nq" type="number" inputmode="decimal" step="0.1" min="0" placeholder="例如 3"></div>'
+    + '<p class="muted small">參考:一般蔬菜約 3 斤,容易縮水的(絲瓜、地瓜葉…)約 4 斤,配料依實際用量。</p>'
+    + '<div class="btns full"><button class="btn pri" data-a="saveIng">加入</button><button class="btn" data-a="closeSheet">取消</button></div>');
+};
+A.saveIng = () => {
+  const id = $('#ni').value;
+  const q = parseFloat($('#nq').value);
+  if (!id) return toast('請選擇食材');
+  closeSheet();
+  const it = M().item[id];
+  ui.draft.ings.push({ i: id, q: q > 0 ? q : (VEG_CATS.indexOf(it.cat) >= 0 ? 3 : 0) });
+  if (!ui.draft.main) ui.draft.main = id;
+  rerender();
+};
+A.delIng = el => { readDish(); ui.draft.ings.splice(+el.dataset.i, 1); rerender(); };
+A.saveDish = () => {
+  const d = readDish();
+  if (!d.name) return toast('請輸入菜名');
+  if (!d.ings.length) return toast('請至少加一個食材');
+  if (S.dishes.some(x => x.name === d.name && x.id !== d.id)) return toast('已經有同名的料理');
+  if (ui.sub.isNew) { d.id = ML.newId('d'); S.dishes.push(d); }
+  else { const k = S.dishes.findIndex(x => x.id === d.id); S.dishes[k] = d; }
+  save();
+  toast('已儲存');
+  back();
+};
+A.copyDish = () => {
+  const d = readDish();
+  ui.draft = JSON.parse(JSON.stringify(d));
+  ui.draft.id = null;
+  ui.draft.name = d.name + '(複製)';
+  ui.draft.status = '候選';
+  ui.sub = { type: 'dish', isNew: true };
+  render();
+  $('#main').scrollTop = 0;
+};
+A.delDish = () => {
+  const d = ui.draft;
+  if (ML.dishUsed(S, d.id)) {
+    return ask('這道菜排過菜單', '為了保留歷史紀錄,不能刪除。要改成「停用」嗎?(不會再被抽到,之後可以恢復)',
+      [['改成停用', () => { const x = S.dishes.find(y => y.id === d.id); x.status = '停用'; save(); back(); }, 'bad']]);
+  }
+  ask('刪除「' + d.name + '」?', '刪除後無法復原。', [['刪除', () => { S.dishes = S.dishes.filter(x => x.id !== d.id); save(); back(); }, 'bad']]);
+};
+
+// 品項
+A.newItem = () => {
+  ui.draft = { id: null, name: '', std: '', cat: '葉菜類', unit: '斤', step: 0.5, supplier: 'veg', keep: '中', green: false, unsure: false, note: '' };
+  ui.sub = { type: 'item', isNew: true, from: 'items' };
+  render();
+};
+A.editItem = el => {
+  const it = S.items.find(x => x.id === el.dataset.id);
+  ui.draft = JSON.parse(JSON.stringify(it));
+  ui.sub = { type: 'item', isNew: false, from: 'items' };
+  render();
+  $('#main').scrollTop = 0;
+};
+A.iKeep = el => { readItem(); ui.draft.keep = el.dataset.v; rerender(); };
+A.saveItem = () => {
+  const it = readItem();
+  if (!it.name) return toast('請輸入品名');
+  if (S.items.some(x => x.name === it.name && x.id !== it.id)) return toast('已經有同名的品項');
+  if (!it.std || it.std === it.name) delete it.std;
+  if (ui.sub.isNew) { it.id = ML.newId('i'); S.items.push(it); }
+  else { const k = S.items.findIndex(x => x.id === it.id); S.items[k] = it; }
+  save();
+  toast('已儲存');
+  ui.sub = { type: 'items' };
+  render();
+};
+A.delItem = () => {
+  const it = ui.draft;
+  if (ML.itemUsed(S, it.id)) return ask('這個品項還在使用', '有料理或叫貨紀錄用到「' + esc(it.name) + '」,不能刪除。請先從料理裡拿掉。', []);
+  ask('刪除「' + it.name + '」?', '', [['刪除', () => { S.items = S.items.filter(x => x.id !== it.id); save(); ui.sub = { type: 'items' }; render(); }, 'bad']]);
+};
+
+// 設定
+A.schDay = el => {
+  const e = S.settings.vegSchedule[+el.dataset.i];
+  const k = +el.dataset.v;
+  const p = e.covers.indexOf(k);
+  if (p >= 0) e.covers.splice(p, 1); else e.covers.push(k);
+  e.covers.sort((a, b) => ((a - e.order + 6) % 7) - ((b - e.order + 6) % 7));
+  save();
+  rerender();
+};
+A.schAdd = () => { S.settings.vegSchedule.push({ order: 1, covers: [] }); save(); rerender(); };
+A.schDel = el => { S.settings.vegSchedule.splice(+el.dataset.i, 1); save(); rerender(); };
+
+// 備份
+A.exportData = () => copyText(JSON.stringify(S), '已複製備份,請貼到記事本或 LINE Keep 保存');
+A.importData = () => {
+  let s;
+  try { s = JSON.parse($('#imp').value); } catch (e) { s = null; }
+  if (!s || s.version !== 1 || !s.items || !s.dishes) return toast('備份文字不正確');
+  ask('還原備份?', '目前的資料會被取代。', [['還原', () => { S = s; saveNow(); toast('已還原'); ui.sub = null; ui.tab = 'today'; render(); }, 'bad']]);
+};
+A.resetData = () => ask('重設為初始資料?', '卡池、品項回到初始內容,<b>菜單和叫貨紀錄全部清空</b>。建議先複製備份。',
+  [['重設', () => { S = ML.initState(SEED); saveNow(); toast('已重設'); ui.sub = null; ui.tab = 'today'; render(); }, 'bad']]);
+
+// ---------- 返回 ----------
+function back() {
+  if (!$('#sheet').classList.contains('hidden')) { closeSheet(); return true; }
+  if (ui.sub) {
+    const from = ui.sub.from;
+    ui.sub = from ? { type: from } : null;
+    render();
+    return true;
+  }
+  if (ui.tab !== 'today') { ui.tab = 'today'; render(); return true; }
+  return false;
+}
+window.appBack = back;
+
+// ---------- 事件 ----------
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-a]');
+  if (!el) return;
+  const f = A[el.dataset.a];
+  if (f) f(el);
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'poolq') { ui.pool.q = t.value; $('#poollist').innerHTML = poolList(); }
+  else if (t.id === 'itemq') { ui.itemQ = t.value; $('#itemlist').innerHTML = itemList(); }
+  else if (t.id === 'pickq') { ui.sheet.q = t.value.trim(); $('#picklist').innerHTML = pickList(); }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.set) {
+    const path = t.dataset.set.split('.');
+    let o = S.settings;
+    for (let i = 0; i < path.length - 1; i++) o = o[path[i]];
+    const k = path[path.length - 1];
+    if (t.type === 'checkbox') o[k] = t.checked;
+    else { const v = parseFloat(t.value); if (!isNaN(v) && v >= 0) o[k] = v; else t.value = o[k]; }
+    if (k === 'people' && !(S.settings.people > 0)) S.settings.people = S.settings.basePeople;
+    save();
+    rerender();
+  } else if (t.dataset.sup) {
+    S.settings.suppliers[t.dataset.sup] = t.value.trim() || S.settings.suppliers[t.dataset.sup];
+    save();
+  } else if (t.dataset.sch != null) {
+    const e2 = S.settings.vegSchedule[+t.dataset.sch];
+    e2.order = +t.value;
+    save();
+    rerender();
+  } else if (t.dataset.ing != null && ui.sub && ui.sub.type === 'dish') {
+    readDish();
+    rerender();
+  }
+});
+
+render();
+</script>
+</body>
+</html>

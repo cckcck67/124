@@ -1,4 +1,4 @@
-"""編譯前檢查 App 內建網頁:HTML 標籤要成對、<script> 內的程式要能被解析(用 node --check)。"""
+"""編譯前檢查 App 內建網頁:HTML 標籤要成對、<script> 內的程式和 .js 檔要能被解析(用 node --check)。"""
 import glob, os, re, subprocess, sys, tempfile
 from html.parser import HTMLParser
 
@@ -18,7 +18,8 @@ class Check(HTMLParser):
             self.errors.append(f'</{tag}> 不成對(目前在 {self.stack[-3:]})')
 
 bad = False
-for f in sorted(glob.glob('app/src/main/assets/*.html') + glob.glob('chat/src/main/assets/*.html')):
+PAGES = ['app', 'chat', 'meal']
+for f in sorted(sum((glob.glob(p + '/src/main/assets/*.html') for p in PAGES), [])):
     text = open(f, encoding='utf-8').read()
     c = Check()
     c.feed(text)
@@ -34,4 +35,10 @@ for f in sorted(glob.glob('app/src/main/assets/*.html') + glob.glob('chat/src/ma
     for e in errs:
         print('  ', e)
     bad = bad or bool(errs)
+for f in sorted(sum((glob.glob(p + '/src/main/assets/*.js') for p in PAGES), [])):
+    r = subprocess.run(['node', '--check', f], capture_output=True, text=True)
+    print(f, 'OK' if r.returncode == 0 else 'FAIL')
+    if r.returncode != 0:
+        print('  ', r.stderr)
+        bad = True
 sys.exit(1 if bad else 0)
