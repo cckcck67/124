@@ -8,6 +8,7 @@
     <application
         android:label="VR網頁播放器"
         android:hardwareAccelerated="true"
+        android:largeHeap="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
