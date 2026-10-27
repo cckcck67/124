@@ -622,7 +622,8 @@ class VrRenderer(
             }
             // 控制面板與游標不放大、不移動,確保完整看得到;
             // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
-            val ocx = cx - side * panelDepth * eyeW
+            // 只有紅點(沒有面板)時放在和網頁同一個距離,才會「貼」在網頁上
+            val ocx = cx - side * (if (showPanel) panelDepth else 0f) * eyeW
             GLES20.glViewport((ocx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
             drawOverlay()
         }

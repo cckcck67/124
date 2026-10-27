@@ -1180,6 +1180,7 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 模式切換 ----------------
 
     private var pendingVr = false
+    @Volatile private var resumeAfterCenter = false   // 進 VR 時暫停的影片,置中倒數完再繼續
 
     private fun setVr(on: Boolean) {
         // 直式全螢幕直接進 VR 會錯亂:先轉成橫式,轉好再進 VR(和橫式全螢幕進 VR 一樣)
@@ -1191,7 +1192,7 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         pendingVr = false
-        if (!on) stopWebCursor()
+        if (!on) { stopWebCursor(); resumeAfterCenter = false }
         endShown = false
         presentation?.endGuard(on && screen != SCREEN_FLIGHT)
         vrMode = on
@@ -1203,7 +1204,11 @@ class MainActivity : Activity(), SensorEventListener {
                                else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         updatePageSize()
         updateTopBar()
-        menu.buttons = if (screen == SCREEN_FLIGHT) VrMenu.FLIGHT_BUTTONS else VrMenu.VIDEO_BUTTONS
+        menu.buttons = when (screen) {
+            SCREEN_FLIGHT -> VrMenu.FLIGHT_BUTTONS
+            SCREEN_WEB -> VrMenu.WEB_VIDEO_BUTTONS
+            else -> VrMenu.VIDEO_BUTTONS
+        }
         sendFlightConfig()   // 空中遊覽:告訴網頁現在是 VR(轉頭看)還是 2D(手勢)
         menu.infoText = null
         reverseLandscape = displayRotation() == Surface.ROTATION_270
@@ -1220,6 +1225,11 @@ class MainActivity : Activity(), SensorEventListener {
         }
         if (!on) pendingMapError?.let { code -> pendingMapError = null; handler.post { showMapError(code) } }
         if (on) {
+            // 影片正在播:先暫停,置中倒數完再繼續播(倒數時不會錯過內容)
+            resumeAfterCenter = false
+            if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) presentation?.videoStatus { st ->
+                if (st != null && !st.paused && vrMode) { presentation?.pauseAll(); resumeAfterCenter = true }
+            }
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
         }
@@ -1554,6 +1564,7 @@ class MainActivity : Activity(), SensorEventListener {
             recenterAt = 0L
             renderer.showHud = false
             if (screen == SCREEN_FLIGHT) handler.post { presentation?.run("window.vrRecentered&&vrRecentered()") }
+            if (resumeAfterCenter) { resumeAfterCenter = false; handler.post { if (vrMode) presentation?.play() } }
             redraw()
         }
 
@@ -1705,6 +1716,16 @@ class MainActivity : Activity(), SensorEventListener {
         redraw()
     }
 
+    // 紅點最近的位置(拍盒子會晃到手機,點選時用拍之前的位置)
+    private val cursorHist = ArrayDeque<FloatArray>()
+
+    private fun cursorBefore(ms: Long): FloatArray {
+        val target = SystemClock.uptimeMillis() - ms
+        var best: FloatArray? = null
+        for (h in cursorHist) if (h[2] <= target) best = h
+        return best ?: floatArrayOf(renderer.cursorX, renderer.cursorY, 0f)
+    }
+
     private fun updateWebCursor(az: Float, down: Float) {
         var dYaw = az - webRefAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
@@ -1713,6 +1734,8 @@ class MainActivity : Activity(), SensorEventListener {
         val ty = (0.5f + (down - webRefDown) / WEB_PITCH_RANGE).coerceIn(0.02f, 0.98f)
         smoothCursor(tx, ty)
         renderer.showCursor = true
+        cursorHist.addLast(floatArrayOf(renderer.cursorX, renderer.cursorY, SystemClock.uptimeMillis().toFloat()))
+        while (cursorHist.size > 120) cursorHist.removeFirst()
         // 紅點貼到最邊緣、停一下(0.35 秒)才動:上 / 下 = 捲動網頁;放大時左 / 右 = 左右移動
         val now = SystemClock.uptimeMillis()
         val cx = renderer.cursorX
@@ -1758,12 +1781,14 @@ class MainActivity : Activity(), SensorEventListener {
         if (kotlin.math.sqrt(sum) < knockThreshold || t - knockLast < 90) return
         knockLast = t
         if (t - knockFirst in 120L..600L) {
+            knockFirstUptime = SystemClock.uptimeMillis() - (t - knockFirst)
             knockFirst = 0L
             handler.post { onBoxDoubleTap() }
         } else knockFirst = t
     }
 
     private var knockThreshold = 4f
+    @Volatile private var knockFirstUptime = 0L
 
     private fun onBoxDoubleTap() {
         if (!vrMode) return
@@ -1780,7 +1805,9 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         if (webCursor) {
-            val cx = renderer.cursorX
+            // 拍盒子兩下大約花 0.3~0.6 秒,手機會跟著晃:用第一下之前的紅點位置
+            val pos = cursorBefore(SystemClock.uptimeMillis() - knockFirstUptime + 80)
+            val cx = pos[0]
             // 紅點在右邊緣拍兩下 = 放大網頁,左邊緣 = 縮小
             if (cx > 1f - WEB_EDGE || cx < WEB_EDGE) {
                 webZoom = (if (cx > 0.5f) webZoom * 1.25f else webZoom / 1.25f).coerceIn(1f, 3f)
@@ -1791,7 +1818,7 @@ class MainActivity : Activity(), SensorEventListener {
                 return
             }
             // 網頁:在紅點的位置點一下
-            val uv = renderer.pageAt(renderer.cursorX, renderer.cursorY)
+            val uv = renderer.pageAt(pos[0], pos[1])
             if (uv[0] in 0f..1f && uv[1] in 0f..1f) p.tap(uv[0] * pageW, uv[1] * pageH)
             return
         }
@@ -1918,7 +1945,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.postDelayed({ p.togglePlay() }, 300)
                 return
             }
-            VrMenu.BTN_END_WEB -> {
+            VrMenu.BTN_WEB, VrMenu.BTN_END_WEB -> {
                 setMenu(false)
                 p.exitFullscreen()
                 p.pauseAll()

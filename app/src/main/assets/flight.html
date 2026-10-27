@@ -29,8 +29,9 @@
   #gaze { position: fixed; left: 50%; bottom: 14vh; width: 18vmin; height: 18vmin; margin-left: -9vmin; border-radius: 50%;
           display: none; z-index: 8; pointer-events: none; align-items: center; justify-content: center;
           background: conic-gradient(#ffd040 var(--p, 0%), rgba(255,255,255,0.25) 0); }
-  #turnHint { position: fixed; top: 46vh; display: none; z-index: 8; pointer-events: none; padding: 1.5vmin 3vmin;
-              border-radius: 2vmin; background: rgba(0,0,0,0.6); color: #ffd040; font-size: 4.5vmin; }
+  #turnHint { position: fixed; top: 50%; width: 8vmin; height: 8vmin; margin-top: -4vmin; display: none; z-index: 8;
+              pointer-events: none; border-radius: 50%; background: rgba(0,0,0,0.5); color: #ffd040; font-size: 6vmin;
+              align-items: center; justify-content: center; }
   #gaze span { width: 14vmin; height: 14vmin; border-radius: 50%; background: rgba(0,0,0,0.65); color: #ffd040;
                display: flex; align-items: center; justify-content: center; font-size: 9vmin; }
   #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 2147483647; display: none; padding: 2vmin; border-radius: 1.5vmin;
@@ -116,9 +117,12 @@ var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設�
 var landPano = '';                // 降落時的街景點(回降落點用)
 // VR 轉向(街景與空中飛行共用):頭轉超過 20 度才開始慢慢轉畫面,每次轉頭最多轉 90 度,
 // 頭回到中間才能再轉;頭偏在一邊時拍盒子兩下 = 自動慢慢轉 90 度(轉身),轉完以當時的頭為正中間
-var TURN_DEAD = 20, TURN_SPEED = 0.8, TURN_MAX = 25, TURN_CAP = 90, AUTO_TURN_SPEED = 30;
-var yawRef = 0, turnAccum = 0, autoTurn = null, lookGain = 1, sideSince = 0;
-var viewYaw = 0;                  // 空中飛行 VR:畫面轉到的方向(相對看向地標)
+// 頭轉 30 度以內畫面完全不動(像看電影);超過才很慢地轉;以正前方為準左右各最多看到 90 度,
+// 更多就拍兩下轉身(自動慢慢轉 90 度)
+var TURN_DEAD = 30, TURN_SPEED = 0.35, TURN_MAX = 12, TURN_RANGE = 90, AUTO_TURN_SEC = 5;
+var yawRef = 0, autoTurn = null, lookGain = 1, sideSince = 0;
+var viewOffset = 0;               // 轉頭看到的偏移(-90 ~ 90 度)
+var flightHome = 0;               // 空中飛行 VR:轉身累積的方向
 var svPitch = 0;                  // 街景 VR 上下看的角度(平滑過)
 var pendingFace = false;          // 降落後等路的資料出來,再決定要不要轉向
 var walkAuto = false, walkSec = 4, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
@@ -358,7 +362,7 @@ function go(p, walk) {
   landAfterLoad = !!walk;
   place = p;
   leg = 0; progress = 0; paused = false; landed = false; manual = false;
-  viewYaw = 0; autoTurn = null; yawRef = lookYaw; turnAccum = 0;
+  flightHome = 0; viewOffset = 0; autoTurn = null; yawRef = lookYaw;
   msg('載入中…');
   loadMaps().then(function () {
     return google.maps.importLibrary('maps3d');
@@ -422,46 +426,46 @@ function ease(x) { return x * x * (3 - 2 * x); }   // 起步、停下都慢慢�
 // 頭實際轉了幾度(扣掉轉頭比例、以上次轉身後的方向為中間)
 function headYaw() { return (lookYaw - yawRef) / (lookGain || 1); }
 
-// 這一格畫面要轉幾度
+// 每一格:更新轉頭偏移(左右各最多 90 度);回傳轉身(自動轉)這一格要轉的角度
 function turnStep(dt) {
-  if (autoTurn) {   // 拍兩下的自動轉身:慢慢轉,頭轉暫時沒有作用
-    var d = Math.min(autoTurn.left, AUTO_TURN_SPEED * dt);
-    autoTurn.left -= d;
-    if (autoTurn.left <= 0.01) { yawRef = lookYaw; turnAccum = 0; var dir = autoTurn.dir; autoTurn = null; return dir * d; }
-    return autoTurn.dir * d;
+  if (autoTurn) {   // 拍兩下的自動轉身:慢慢起步、慢慢停下,頭轉暫時沒有作用
+    autoTurn.t = Math.min(1, autoTurn.t + dt / AUTO_TURN_SEC);
+    var target = 90 * ease(autoTurn.t);
+    var d = target - autoTurn.done;
+    autoTurn.done = target;
+    var dir = autoTurn.dir;
+    if (autoTurn.t >= 1) { yawRef = lookYaw; autoTurn = null; }
+    return dir * d;
   }
   var y = headYaw();
-  if (Math.abs(y) <= TURN_DEAD) { turnAccum = 0; return 0; }
-  if (Math.abs(turnAccum) >= TURN_CAP) return 0;
+  if (Math.abs(y) <= TURN_DEAD) return 0;
   var step = Math.min(TURN_MAX, (Math.abs(y) - TURN_DEAD) * TURN_SPEED) * dt;
-  step = Math.min(step, TURN_CAP - Math.abs(turnAccum));
-  var d2 = (y > 0 ? 1 : -1) * step;
-  turnAccum += d2;
-  return d2;
+  viewOffset = Math.max(-TURN_RANGE, Math.min(TURN_RANGE, viewOffset + (y > 0 ? 1 : -1) * step));
+  return 0;
 }
 
-// 頭偏在一邊一陣子:提示可以拍兩下轉身
+// 頭偏在一邊一陣子:旁邊出現小小的轉身圖示(拍兩下就轉)
 function turnHint(now) {
   var h = $('turnHint');
   var y = headYaw();
   if (!vr || autoTurn || Math.abs(y) <= TURN_DEAD) { sideSince = 0; h.style.display = 'none'; return; }
   if (!sideSince) sideSince = now;
   if (now - sideSince < 800) return;
-  h.textContent = y > 0 ? '拍兩下 向右轉 ➜' : '⬅ 拍兩下 向左轉';
-  h.style.left = y > 0 ? '' : '4vw';
-  h.style.right = y > 0 ? '4vw' : '';
-  h.style.display = 'block';
+  h.textContent = y > 0 ? '↻' : '↺';
+  h.style.left = y > 0 ? '' : '30vw';
+  h.style.right = y > 0 ? '30vw' : '';
+  h.style.display = 'flex';
 }
 
 // App:VR 重新置中了(正前方重設),轉身後記住的方向也要歸零
-window.vrRecentered = function () { yawRef = 0; turnAccum = 0; autoTurn = null; };
+window.vrRecentered = function () { yawRef = 0; autoTurn = null; };
 
 // App:拍盒子兩下。頭偏一邊 = 往那邊轉 90 度;在街景正前方 = 往前走一步
 window.vrKnock = function () {
   if (!place || !vr) return '';
   var y = headYaw();
   if (Math.abs(y) > TURN_DEAD && !autoTurn) {
-    autoTurn = { dir: y > 0 ? 1 : -1, left: 90 };
+    autoTurn = { dir: y > 0 ? 1 : -1, t: 0, done: 0 };
     $('turnHint').style.display = 'none';
     return 'turn';
   }
@@ -478,11 +482,11 @@ function fly(now) {
     // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
     if (pano && vr) {
       // 頭在中間 20 度內轉動,畫面不動;超過才慢慢轉(每次轉頭最多 90 度),拍兩下 = 轉身 90 度
-      panoBase = (panoBase + turnStep(dt) + 360) % 360;
+      panoBase = (panoBase + turnStep(dt) + 360) % 360;   // 轉身時整個方向轉
       turnHint(now);
       svPitch += (Math.max(-60, Math.min(60, lookPitch)) - svPitch) * Math.min(1, dt * 6);   // 上下平滑
-      pano.setPov({ heading: panoBase, pitch: svPitch });
-      if (back && back.__want) back.setPov({ heading: back.__base, pitch: svPitch });
+      pano.setPov({ heading: (panoBase + viewOffset + 360) % 360, pitch: svPitch });
+      if (back && back.__want) back.setPov({ heading: (back.__base + viewOffset + 360) % 360, pitch: svPitch });
     }
     // 自動散步:時間到就沿著路往前走一步(照身體正前方,不是照頭,轉頭看風景不會走歪)
     if (walkAuto && now - lastStep > walkSec * 1000) {
@@ -516,9 +520,9 @@ function fly(now) {
       altitude: alt
     };
     map.range = 1;
-    viewYaw = (viewYaw + turnStep(dt) + 360) % 360;
+    flightHome = (flightHome + turnStep(dt) + 360) % 360;
     turnHint(now);
-    map.heading = (toCenter + viewYaw + 360) % 360;
+    map.heading = (toCenter + flightHome + viewOffset + 360) % 360;
     map.tilt = Math.max(0, Math.min(90, 90 - down + lookPitch));           // 90 = 看水平
   } else {
     // 2D:同樣的視角,但改成「繞著地標看」,手勢拖動、縮放時以地標為中心
@@ -593,6 +597,7 @@ function land() {
         back.__want = '';
         pano.setPano(data.location.pano);
         landPano = data.location.pano;
+        viewOffset = 0; yawRef = lookYaw; autoTurn = null;
         // 街景的路(links)載入後,正前方沒有路就轉向最近的路
         pendingFace = true;
         walkAuto = false;
@@ -617,7 +622,7 @@ function land() {
 
 // 目前臉朝的方向(度):VR 用轉頭角度,2D 用街景目前的方向
 function viewHeading() {
-  if (vr) return panoBase;   // VR:畫面中間就是正在看的方向
+  if (vr) return (panoBase + viewOffset + 360) % 360;   // VR:畫面中間就是正在看的方向
   var pov = pano && pano.getPov ? pano.getPov() : null;
   return pov ? pov.heading : panoBase;
 }
@@ -697,7 +702,7 @@ function goLink(link) {
   if (stepping || !back) return;
   stepping = true;
   try {
-    if (vr) panoBase = link.heading;   // 正前方轉成路的方向(坐著的人不用轉身)
+    if (vr) { panoBase = link.heading; viewOffset = 0; }   // 正前方轉成路的方向(坐著的人不用轉身)
     else pano.setPov({ heading: link.heading, pitch: 0 });
   } catch (e) {}
   preload(link);
@@ -783,6 +788,7 @@ function roadName() {
 
 function takeOff() {
   walkAuto = false;
+  viewOffset = 0;
   $('gaze').style.display = 'none';
   fadeTo(function () {
     landed = false;
