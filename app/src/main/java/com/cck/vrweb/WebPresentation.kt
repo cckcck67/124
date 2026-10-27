@@ -349,6 +349,11 @@ class WebPresentation(
                 "v.currentTime=v.duration*$fraction;return true;})()")
     }
 
+    /** 繼續播放(VR 置中倒數完) */
+    fun play() {
+        js("(function(){$FIND_VIDEO if(v&&v.paused)v.play();})()")
+    }
+
     /** 播放/暫停;找不到影片時點一下畫面中央 */
     fun togglePlay() {
         js("(function(){$FIND_VIDEO if(!v)return false;" +

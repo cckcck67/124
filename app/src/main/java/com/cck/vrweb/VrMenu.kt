@@ -68,12 +68,17 @@ class VrMenu {
         const val BTN_END_REPLAY = 21    // 影片播完:重播
         const val BTN_END_WEB = 22       //           回到網頁(VR 中用紅點操作網頁)
         const val BTN_END_EXIT = 23      //           離開 VR
+        const val BTN_WEB = 24           // 影片:停止播放,進入 VR 網頁操作(紅點)
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
             "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛低", "飛高",
-            "前進", "迴轉", "自動散步", "走快－", "走快＋", "回降落點")
+            "前進", "迴轉", "自動散步", "走快－", "走快＋", "回降落點",
+            "", "", "", "網頁")
 
         /** 影片(網頁、我的影片)用的按鈕 */
         val VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_RECENTER, BTN_SETTINGS)
+        /** 網頁影片:多一個「網頁」(停止播放,在 VR 中用紅點操作網頁) */
+        val WEB_VIDEO_BUTTONS = intArrayOf(BTN_POSTURE, BTN_VOL_DOWN, BTN_VOL_UP, BTN_FWD, BTN_MODE, BTN_WEB,
+            BTN_RECENTER, BTN_SETTINGS)
         /** 空中遊覽用的按鈕(設定也是空中遊覽自己的,和影片分開) */
         // 給長輩、小孩用:速度、高度直接放在第一層
         val FLIGHT_BUTTONS = intArrayOf(BTN_POSTURE, BTN_FLY_PAUSE, BTN_FLY_NEXT, BTN_FLY_LAND,
