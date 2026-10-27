@@ -1619,7 +1619,8 @@ class MainActivity : Activity(), SensorEventListener {
         val yt = renderer.mode == VrRenderer.MODE_YT
         val openAt = if (!lying) SIT_OPEN else if (yt) LIE_OPEN_YT else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
         val closeAt = if (!lying) SIT_CLOSE else if (yt) LIE_CLOSE_YT else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
-        if (!menuOpen && tilt > openAt) setMenu(true)
+        if (!panelArmed && tilt < closeAt) panelArmed = true   // 頭抬回來之後,低頭才會再叫出面板
+        if (!menuOpen && tilt > openAt && panelArmed) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
         if (!menuOpen) {
             if (webCursor) updateWebCursor(az, down)
@@ -1682,10 +1683,12 @@ class MainActivity : Activity(), SensorEventListener {
         renderer.cursorX = 0.5f
         renderer.cursorY = (VrMenu.Y0 + VrMenu.Y1) / 2f
         redrawPanel(force = true)
+        showMessage("影片播完了", "看著圖示,拍盒子兩下", 3000)
     }
 
     // VR 中操作網頁:紅點跟著頭,碰到上下邊緣捲動,快速拍盒子兩下 = 點選
     private var webCursor = false
+    private var panelArmed = true   // 從面板按「網頁」後先不要馬上又叫出面板
     private var webRefAz = 0f
     private var webRefDown = 0f
     private var lastScrollAt = 0L
@@ -1698,8 +1701,8 @@ class MainActivity : Activity(), SensorEventListener {
         webZoom = 1f
         renderer.zoom = webZoom
         renderer.panX = 0f
-        webRefAz = lastAz
-        webRefDown = sensorDown
+        webRefAz = 0f      // 紅點中心 = 正前方(從面板低頭選的時候,頭抬回來紅點就在中間)
+        webRefDown = 0f
         renderer.cursorX = 0.5f
         renderer.cursorY = 0.5f
         renderer.showCursor = true
@@ -1900,7 +1903,8 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         val need = if (t == VrMenu.BAR) DWELL_BAR_MS else DWELL_MS
-        menu.dwell = if (t == VrMenu.NONE || dwellDone) 0f
+        // 播完選單:只用拍盒子兩下點選(看著不會自動按下)
+        menu.dwell = if (t == VrMenu.NONE || dwellDone || menu.endPage) 0f
         else ((now - hoverStart).toFloat() / need).coerceIn(0f, 1f)
 
         if (t != VrMenu.NONE && !dwellDone && menu.dwell >= 1f) {
@@ -1947,6 +1951,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             VrMenu.BTN_WEB, VrMenu.BTN_END_WEB -> {
                 setMenu(false)
+                panelArmed = false
                 p.exitFullscreen()
                 p.pauseAll()
                 if (renderer.mode != VrRenderer.MODE_2D) setMode(VrRenderer.MODE_2D)
