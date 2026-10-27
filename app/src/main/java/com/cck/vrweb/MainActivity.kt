@@ -78,6 +78,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val REQ_YOUTUBE = 12
         const val WEB_YAW_RANGE = 0.9f     // VR 網頁紅點:左右轉頭約 ±26 度走完整個寬
         const val WEB_PITCH_RANGE = 0.6f   //             上下約 ±17 度走完整個高(低頭 50 度才會叫出面板)
+        const val WEB_EDGE = 0.05f         //             紅點貼到最邊緣這一小段才捲動 / 縮放
         val KNOCK_LEVELS = floatArrayOf(2.5f, 4f, 6f)        // 拍盒子靈敏度:高 / 中 / 低(加速度門檻 m/s²)
         val KNOCK_NAMES = arrayOf("高(輕拍就有反應)", "中", "低(要拍用力一點)")
 
@@ -706,14 +707,19 @@ class MainActivity : Activity(), SensorEventListener {
         listOf(
             Setting("gain", "轉頭比例", 0.05f, 0.2f, 1.5f, "%.2f", { 0.7f }) { flyGain = it; lastYtYaw = 999f },
             Setting("speed", "飛行速度", 0.25f, 0.25f, 3f, "%.2f倍", { 1f }) { flySpeed = it; sendFlightConfig() },
-            Setting("alt", "飛行高度", 0.1f, 0.5f, 2.5f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
+            Setting("alt", "飛行高度", 0.1f, 0.3f, 4f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
         ) + flatSettings
     }
+
+    private var wasLanded = false
 
     /** 面板第一層的「飛快 / 飛高 ±」:改空中遊覽的速度 / 高度設定 */
     private fun bumpFlight(key: String, dir: Int) {
         val st = flightSettings.firstOrNull { it.key == key } ?: return
-        val v = (settingValue(st) + dir * st.step).coerceIn(st.min, st.max)
+        // 飛高 / 飛低:每按一次高度變 1.3 倍,看得出差別
+        val cur = settingValue(st)
+        val v = (if (key == "alt") (if (dir > 0) cur * 1.3f else cur / 1.3f) else cur + dir * st.step)
+            .coerceIn(st.min, st.max)
         prefs.edit().putFloat(prefKey(st), v).apply()
         st.apply(v)
         pollStatus()
@@ -1229,7 +1235,7 @@ class MainActivity : Activity(), SensorEventListener {
         // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
         if (screen == SCREEN_FLIGHT) {
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
-            handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
+            handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "移動頭部體驗", 2500) }, ENTER_DELAY_MS + 300)
             return
         }
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
@@ -1672,20 +1678,28 @@ class MainActivity : Activity(), SensorEventListener {
     private var webRefDown = 0f
     private var lastScrollAt = 0L
 
+    private var webZoom = 1f        // VR 網頁的放大倍率(1 = 整頁剛好放進畫面)
+    private var edgeSince = 0L      // 紅點停在邊緣多久了(停一下才開始捲動,避免一靠近就動)
+
     private fun startWebCursor() {
         webCursor = true
+        webZoom = 1f
+        renderer.zoom = webZoom
+        renderer.panX = 0f
         webRefAz = lastAz
         webRefDown = sensorDown
         renderer.cursorX = 0.5f
         renderer.cursorY = 0.5f
         renderer.showCursor = true
-        showMessage("紅點跟著頭", "看上下邊緣捲動・拍盒子兩下點選", 4000)
+        showMessage("紅點跟著頭", "上下邊緣捲動・左右邊緣拍兩下縮放", 4000)
         redraw()
     }
 
     private fun stopWebCursor() {
         if (!webCursor) return
         webCursor = false
+        renderer.panX = 0f
+        applySettings()   // 回到這個模式原本的畫面大小
         renderer.showCursor = menuOpen
         redraw()
     }
@@ -1698,14 +1712,22 @@ class MainActivity : Activity(), SensorEventListener {
         val ty = (0.5f + (down - webRefDown) / WEB_PITCH_RANGE).coerceIn(0.02f, 0.98f)
         smoothCursor(tx, ty)
         renderer.showCursor = true
-        // 碰到上 / 下邊緣:持續捲動,越靠邊越快
+        // 紅點貼到最邊緣、停一下(0.35 秒)才動:上 / 下 = 捲動網頁;放大時左 / 右 = 左右移動
         val now = SystemClock.uptimeMillis()
+        val cx = renderer.cursorX
         val cy = renderer.cursorY
-        if (now - lastScrollAt > 50 && (cy < 0.12f || cy > 0.88f)) {
+        val edge = cy < WEB_EDGE || cy > 1f - WEB_EDGE || (webZoom > 1.01f && (cx < WEB_EDGE || cx > 1f - WEB_EDGE))
+        if (!edge) edgeSince = 0L
+        else if (edgeSince == 0L) edgeSince = now
+        if (edge && now - edgeSince > 350 && now - lastScrollAt > 50) {
             lastScrollAt = now
-            val depth = if (cy < 0.12f) (0.12f - cy) / 0.12f else (cy - 0.88f) / 0.12f
-            val px = (pageH * (0.006f + 0.02f * depth)).toInt().coerceAtLeast(4)
-            presentation?.scrollBy(if (cy < 0.12f) -px else px)
+            if (cy < WEB_EDGE || cy > 1f - WEB_EDGE) {
+                val px = (pageH * 0.012f).toInt().coerceAtLeast(4)
+                presentation?.scrollBy(if (cy < WEB_EDGE) -px else px)
+            } else {
+                val maxPan = 0.5f - 0.5f / webZoom
+                renderer.panX = (renderer.panX + (if (cx > 0.5f) 0.008f else -0.008f)).coerceIn(-maxPan, maxPan)
+            }
         }
         redraw()
     }
@@ -1756,7 +1778,18 @@ class MainActivity : Activity(), SensorEventListener {
             }
             return
         }
-        if (webCursor) {   // 網頁:在紅點的位置點一下
+        if (webCursor) {
+            val cx = renderer.cursorX
+            // 紅點在右邊緣拍兩下 = 放大網頁,左邊緣 = 縮小
+            if (cx > 1f - WEB_EDGE || cx < WEB_EDGE) {
+                webZoom = (if (cx > 0.5f) webZoom * 1.25f else webZoom / 1.25f).coerceIn(1f, 3f)
+                renderer.zoom = webZoom
+                val maxPan = 0.5f - 0.5f / webZoom
+                renderer.panX = renderer.panX.coerceIn(-maxPan, maxPan)
+                redraw()
+                return
+            }
+            // 網頁:在紅點的位置點一下
             val uv = renderer.pageAt(renderer.cursorX, renderer.cursorY)
             if (uv[0] in 0f..1f && uv[1] in 0f..1f) p.tap(uv[0] * pageW, uv[1] * pageH)
             return
@@ -2033,6 +2066,9 @@ class MainActivity : Activity(), SensorEventListener {
                 menu.flyPaused = o?.optBoolean("paused") == true
                 menu.flyLanded = o?.optBoolean("landed") == true
                 menu.walking = o?.optBoolean("walking") == true
+                // 剛降落到街景:提示一下
+                if (menu.flyLanded && !wasLanded && vrMode) showMessage("街景", "移動頭部體驗", 3000)
+                wasLanded = menu.flyLanded
                 // 降落到街景:面板換成散步用的按鈕;起飛後換回飛行按鈕
                 val want = if (menu.flyLanded) VrMenu.WALK_BUTTONS else VrMenu.FLIGHT_BUTTONS
                 if (!menu.buttons.contentEquals(want)) { menu.buttons = want; menu.hover = VrMenu.NONE }
@@ -2045,6 +2081,7 @@ class MainActivity : Activity(), SensorEventListener {
                         o.optBoolean("arrived") -> "  已抵達"
                         else -> ""
                     } + (if (menu.flyPaused && !menu.flyLanded) "  已暫停" else "") +
+                    (if (o.optBoolean("loading")) "  地圖載入中…" else "") +
                     "  速度 %.2f倍  高度 %.1f倍".format(flySpeed, flyAlt)
                 redrawPanel(force = true)
             }

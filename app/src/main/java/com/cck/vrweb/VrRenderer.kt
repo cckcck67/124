@@ -613,8 +613,9 @@ class VrRenderer(
             } else {
                 val z = zoom
                 val vy = cy + lift * viewH
+                val px = if (m == MODE_2D) panX * r[2] * z else 0f
                 GLES20.glViewport(
-                    (cx - r[2] * z / 2f).toInt(), (vy - r[3] * z / 2f).toInt(),
+                    (cx - r[2] * z / 2f - px).toInt(), (vy - r[3] * z / 2f).toInt(),
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
                 drawVideo(distortion, 0f, sx, sy, ox, oy)
@@ -674,8 +675,11 @@ class VrRenderer(
     fun pageAt(cx: Float, cy: Float): FloatArray {
         val z = zoom.coerceAtLeast(0.1f)
         val liftN = lift * lastViewH / lastRectH.coerceAtLeast(1f)
-        return floatArrayOf(0.5f + (cx - 0.5f) / z, 0.5f + (cy - 0.5f + liftN) / z)
+        return floatArrayOf(0.5f + panX + (cx - 0.5f) / z, 0.5f + (cy - 0.5f + liftN) / z)
     }
+
+    /** VR 網頁放大時左右移動(網頁寬度的比例,正 = 看右邊) */
+    @Volatile var panX = 0f
 
     /** 曲面巨幕:螢幕寬度 = 張開的角度,高度依影片比例 */
     private fun drawCurve(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float) {
