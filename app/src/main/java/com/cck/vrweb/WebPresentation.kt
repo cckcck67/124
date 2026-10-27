@@ -370,6 +370,22 @@ class WebPresentation(
         }
     }
 
+    /** 網頁上下捲動(VR 紅點碰到上下邊緣時) */
+    fun scrollBy(dy: Int) {
+        js("window.scrollBy(0,$dy)")
+    }
+
+    /**
+     * VR 中影片快播完時先停在最後(不讓網頁自己跳走或接著播下一部),由 App 顯示「播完」選單。
+     * on = false 時取消
+     */
+    fun endGuard(on: Boolean) {
+        js("(function(on){window.__vrGuard=on;if(!on)return;" +
+            "document.querySelectorAll('video').forEach(function(v){if(v.__vrG)return;v.__vrG=1;" +
+            "v.addEventListener('timeupdate',function(){if(!window.__vrGuard)return;" +
+            "if(isFinite(v.duration)&&v.duration>5&&!v.paused&&v.duration-v.currentTime<0.4)v.pause();});});})($on)")
+    }
+
     /** 暫停網頁裡所有影片(回首頁時) */
     fun pauseAll() {
         js("document.querySelectorAll('video').forEach(function(v){v.pause();})")

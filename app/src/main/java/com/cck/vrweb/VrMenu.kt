@@ -65,6 +65,9 @@ class VrMenu {
         const val BTN_WALK_SLOWER = 18   //           走慢一點
         const val BTN_WALK_FASTER = 19   //           走快一點
         const val BTN_WALK_HOME = 20     //           回降落點
+        const val BTN_END_REPLAY = 21    // 影片播完:重播
+        const val BTN_END_WEB = 22       //           回到網頁(VR 中用紅點操作網頁)
+        const val BTN_END_EXIT = 23      //           離開 VR
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
             "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛高－", "飛高＋",
             "前進", "迴轉", "自動散步", "走快－", "走快＋", "回降落點")
@@ -123,6 +126,7 @@ class VrMenu {
     var flyPaused = false
     var flyLanded = false
     var walking = false        // 街景自動散步中
+    var endPage = false        // 影片播完的選單(重播 / 回到網頁 / 離開 VR)
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
@@ -175,6 +179,10 @@ class VrMenu {
         val px = (cx - X0) / (X1 - X0) * W
         val py = yOf((cy - Y0) / (Y1 - Y0) * H)   // 換回坐姿版面座標
         if (px < ROW_L || px > ROW_R) return NONE
+        if (endPage) {   // 影片播完:三個大按鈕各佔三分之一
+            val i = ((px - ROW_L) / ((ROW_R - ROW_L) / 3f)).toInt()
+            return when (i) { 0 -> BTN_END_REPLAY; 1 -> BTN_END_WEB; 2 -> BTN_END_EXIT; else -> NONE }
+        }
         if (settingsPage) return hitSettings(px, py)
         if (py < START_END || py >= BTN_END) return NONE
         if (py < BAR_END) {
@@ -217,6 +225,27 @@ class VrMenu {
         centerText.textSize = size
     }
 
+    /** 影片播完:重播 / 回到網頁 / 離開 VR(大圖示,底下一行小字) */
+    private fun drawEnd(c: Canvas) {
+        val icons = arrayOf("🔁", "🌐", "🚪")
+        val names = arrayOf("重播", "回到網頁", "離開VR")
+        val ids = intArrayOf(BTN_END_REPLAY, BTN_END_WEB, BTN_END_EXIT)
+        val w = (ROW_R - ROW_L) / 3f
+        for (i in 0..2) {
+            val l = ROW_L + i * w + 10
+            val r = ROW_L + (i + 1) * w - 10
+            val hot = hover == ids[i]
+            drawButton(c, l, 20f, r, H - 20f, hot, if (hot) dwell else 0f, "")
+            val cx = (l + r) / 2
+            val size = centerText.textSize
+            centerText.textSize = 150f
+            c.drawText(icons[i], cx, H / 2f + 30f, centerText)
+            centerText.textSize = 40f
+            c.drawText(names[i], cx, H - 50f, centerText)
+            centerText.textSize = size
+        }
+    }
+
     private fun drawSettings(c: Canvas) {
         val w = cellW()
         for (i in 0 until cellCount()) {
@@ -245,6 +274,10 @@ class VrMenu {
         val c = Canvas(b)
         rect.set(0f, 0f, W.toFloat(), H.toFloat())
         c.drawRoundRect(rect, 28f, 28f, bgPaint)
+        if (endPage) {
+            drawEnd(c)
+            return
+        }
         if (settingsPage) {
             drawSettings(c)
             return
