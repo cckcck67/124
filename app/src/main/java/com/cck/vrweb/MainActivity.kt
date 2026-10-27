@@ -707,7 +707,7 @@ class MainActivity : Activity(), SensorEventListener {
         listOf(
             Setting("gain", "轉頭比例", 0.05f, 0.2f, 1.5f, "%.2f", { 0.7f }) { flyGain = it; lastYtYaw = 999f },
             Setting("speed", "飛行速度", 0.25f, 0.25f, 3f, "%.2f倍", { 1f }) { flySpeed = it; sendFlightConfig() },
-            Setting("alt", "飛行高度", 0.1f, 0.3f, 4f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
+            Setting("alt", "飛行高度", 0.05f, 0.13f, 4f, "%.2f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
         ) + flatSettings
     }
 
@@ -726,7 +726,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun sendFlightConfig() {
-        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode)")
+        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode,$flyGain)")
     }
 
     private fun modeSettings(m: Int) = when {
@@ -1235,7 +1235,7 @@ class MainActivity : Activity(), SensorEventListener {
         // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
         if (screen == SCREEN_FLIGHT) {
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
-            handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "移動頭部體驗", 2500) }, ENTER_DELAY_MS + 300)
+            handler.postDelayed({ if (vrMode) showMessage("移動頭部體驗", "", 2500) }, ENTER_DELAY_MS + 300)
             return
         }
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
@@ -1553,6 +1553,7 @@ class MainActivity : Activity(), SensorEventListener {
             recenter = false
             recenterAt = 0L
             renderer.showHud = false
+            if (screen == SCREEN_FLIGHT) handler.post { presentation?.run("window.vrRecentered&&vrRecentered()") }
             redraw()
         }
 
@@ -1794,6 +1795,7 @@ class MainActivity : Activity(), SensorEventListener {
             if (uv[0] in 0f..1f && uv[1] in 0f..1f) p.tap(uv[0] * pageW, uv[1] * pageH)
             return
         }
+        if (screen == SCREEN_FLIGHT) { p.run("window.vrKnock&&vrKnock()"); return }   // 空中遊覽 / 街景:轉身或前進
         if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) p.togglePlay()   // 看影片時:播放 / 暫停
     }
 
@@ -2067,7 +2069,7 @@ class MainActivity : Activity(), SensorEventListener {
                 menu.flyLanded = o?.optBoolean("landed") == true
                 menu.walking = o?.optBoolean("walking") == true
                 // 剛降落到街景:提示一下
-                if (menu.flyLanded && !wasLanded && vrMode) showMessage("街景", "移動頭部體驗", 3000)
+                if (menu.flyLanded && !wasLanded && vrMode) showMessage("移動頭部體驗", "", 3000)
                 wasLanded = menu.flyLanded
                 // 降落到街景:面板換成散步用的按鈕;起飛後換回飛行按鈕
                 val want = if (menu.flyLanded) VrMenu.WALK_BUTTONS else VrMenu.FLIGHT_BUTTONS
