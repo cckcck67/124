@@ -100,15 +100,19 @@ var START_FAR = 3;       // 從 3 倍懸停距離的地方出發
 var M_PER_DEG = 111320;
 
 var key = '', map = null, place = null;
+var mapSteady = false, waitSteady = false, steadyFrom = 0;   // 等 3D 地圖載好再開始飛
 var leg = 0;             // 第幾個方向接近(每次「換角度」轉 90 度)
 var progress = 0;        // 0 = 出發點,1 = 懸停點
 var paused = false, last = 0, looping = false;
-var speed = 1, altScale = 1;
+var speed = 1, altScale = 1, altNow = 1;   // altNow 慢慢追上 altScale(飛高 / 飛低不會突然跳)
+var MIN_ABOVE = 60;                         // 飛低的下限:至少離地標頂端 60 公尺
 var vr = false;                   // App 是否在 VR 模式(VR 裡轉頭看,2D 用手勢)
 var manual = false;               // 2D 時用手勢移動了地圖:自動飛行先停住,不再蓋掉手勢
 var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
 var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設面向
 var landPano = '';                // 降落時的街景點(回降落點用)
+var TURN_DEAD = 15, TURN_SPEED = 3, TURN_MAX = 75;   // 街景 VR:頭轉超過 15 度才開始轉畫面(每秒最多 75 度)
+var svPitch = 0;                  // 街景 VR 上下看的角度(平滑過)
 var pendingFace = false;          // 降落後等路的資料出來,再決定要不要轉向
 var walkAuto = false, walkSec = 4, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
 var pickMap = null;
@@ -209,8 +213,8 @@ window.vrFlight = function (cmd) {
     return true;
   }
   if (cmd === 'pause') { if (manual) resume(); else paused = !paused; }
-  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; });
-  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; });
+  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; holdForLoad(); });
+  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; holdForLoad(); });
   else if (cmd === 'resume') resume();
   refreshCtl();
   return true;
@@ -218,7 +222,8 @@ window.vrFlight = function (cmd) {
 // 面板顯示用的狀態
 window.vrFlightState = function () {
   return place ? { name: place.name, paused: paused || manual, arrived: progress >= 1, landed: landed, manual: manual,
-                   road: landed ? roadName() : '', walking: landed && walkAuto, walkSec: walkSec } : null;
+                   road: landed ? roadName() : '', walking: landed && walkAuto, walkSec: walkSec,
+                   loading: !landed && waitSteady } : null;
 };
 // 返回鍵:選地圖 → 回去;地面 → 起飛;手動移動中 → 回到航線;空中 → 目的地選單;已在選單回傳 false(App 回首頁)
 window.vrBack = function () {
@@ -354,6 +359,8 @@ function go(p, walk) {
       try { map = new lib.Map3DElement(Object.assign({ mode: 'SATELLITE', defaultUIHidden: true }, opts)); }
       catch (e) { map = new lib.Map3DElement(opts); }
       $('map').appendChild(map);
+      // 地圖畫面成形(圖塊載好)時會通知;還沒成形就先不要飛,避免一邊飛一邊糊
+      map.addEventListener('gmp-steadychange', function (e) { mapSteady = !!(e && e.isSteady); });
     }
     if (place !== p) return;   // 載入中又按了返回
     msg('');
@@ -362,12 +369,20 @@ function go(p, walk) {
     $('menu').style.display = 'none';
     flash(p.name);
     refreshCtl();
+    holdForLoad();
     startLoop();
     if (landAfterLoad) { landAfterLoad = false; land(); }
   }).catch(function (e) {
     place = null;
     msg('無法載入 3D 地圖:' + (e && e.message ? e.message : e));
   });
+}
+
+// 換到新的位置後,先等地圖載好再開始飛
+function holdForLoad() {
+  mapSteady = false;
+  waitSteady = true;
+  steadyFrom = performance.now();
 }
 
 // 只跑一個動畫迴圈
@@ -403,9 +418,13 @@ function fly(now) {
   if (landed) {
     // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
     if (pano && vr) {
-      var pitch = Math.max(-80, Math.min(80, lookPitch));
-      pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: pitch });
-      if (back && back.__want) back.setPov({ heading: (back.__base + lookYaw + 360) % 360, pitch: pitch });
+      // 頭在中間一段範圍內轉動,畫面不動(不會跟著細微晃動);轉超過範圍,畫面才往那邊持續轉,
+      // 轉多一點轉得快一點,可以一直轉一圈(360 度)
+      var over = Math.abs(lookYaw) - TURN_DEAD;
+      if (over > 0) panoBase = (panoBase + (lookYaw > 0 ? 1 : -1) * Math.min(TURN_MAX, over * TURN_SPEED) * dt + 360) % 360;
+      svPitch += (Math.max(-60, Math.min(60, lookPitch)) - svPitch) * Math.min(1, dt * 6);   // 上下平滑
+      pano.setPov({ heading: panoBase, pitch: svPitch });
+      if (back && back.__want) back.setPov({ heading: back.__base, pitch: svPitch });
     }
     // 自動散步:時間到就沿著路往前走一步(照身體正前方,不是照頭,轉頭看風景不會走歪)
     if (walkAuto && now - lastStep > walkSec * 1000) {
@@ -416,13 +435,19 @@ function fly(now) {
     return;
   }
   if (manual) return;   // 手勢控制中,不要蓋掉
-  if (!paused && progress < 1) progress = Math.min(1, progress + dt * speed / GLIDE_SEC);
+  altNow += (altScale - altNow) * Math.min(1, dt * 1.5);
+  if (waitSteady) {   // 地圖還在載入:先停在原地,等畫面成形再飛
+    if (mapSteady && now - steadyFrom > 600) waitSteady = false;
+    else if (now - steadyFrom > 10000) waitSteady = false;
+  }
+  if (!paused && !waitSteady && progress < 1) progress = Math.min(1, progress + dt * speed / GLIDE_SEC);
 
   var p = place;
   var bearing = (180 + leg * 90) * Math.PI / 180;               // 出發方向(從地標看出去):先從南邊接近
-  var dist = p.r * (START_FAR - (START_FAR - 1) * ease(progress));
+  // 飛高 = 離得更高更遠(畫面縮小、看得廣);飛低 = 更低更近(畫面放大),但不會低於地標頂端 60 公尺
+  var dist = p.r * (START_FAR - (START_FAR - 1) * ease(progress)) * Math.sqrt(altNow);
   var east = Math.sin(bearing) * dist, north = Math.cos(bearing) * dist;
-  var alt = p.top + (p.alt - p.top) * altScale;
+  var alt = p.top + Math.max(MIN_ABOVE, (p.alt - p.top) * altNow);
   var toCenter = (Math.atan2(-east, -north) * 180 / Math.PI + 360) % 360;   // 看向地標的方位(滑行中不變)
   var down = Math.atan2(alt - p.top, dist) * 180 / Math.PI;                 // 看向地標要低頭幾度
   if (vr) {
@@ -532,7 +557,7 @@ function land() {
 
 // 目前臉朝的方向(度):VR 用轉頭角度,2D 用街景目前的方向
 function viewHeading() {
-  if (vr) return (panoBase + lookYaw + 360) % 360;
+  if (vr) return panoBase;   // VR:畫面中間就是正在看的方向
   var pov = pano && pano.getPov ? pano.getPov() : null;
   return pov ? pov.heading : panoBase;
 }
@@ -623,10 +648,9 @@ function goLink(link) {
     if (!vr) back.setPov({ heading: link.heading, pitch: 0 });
     var front = pano.__div;
     front.style.transformOrigin = '50% 50%';
-    // 放大慢慢進行,淡出也拉長(約 1.5 秒),下一張已在後面,看起來是慢慢融合過去
-    front.style.transition = 'transform 1.5s ease-out, opacity 1.2s ease-in 0.3s';
+    // 目前這張從中間往外放大,放大完直接消失(不淡出),露出後面已經載好的下一張
+    front.style.transition = 'transform 1.2s ease-in';
     front.style.transform = 'scale(1.5)';
-    front.style.opacity = '0';
     setTimeout(function () {
       var old = pano;
       pano = back;
@@ -635,10 +659,9 @@ function goLink(link) {
       layer();
       front.style.transition = 'none';
       front.style.transform = '';
-      front.style.opacity = '';
       stepping = false;
       preloadAhead();
-    }, 1520);
+    }, 1220);
   })();
 }
 
