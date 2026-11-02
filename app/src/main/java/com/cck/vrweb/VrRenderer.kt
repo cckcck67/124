@@ -582,6 +582,8 @@ class VrRenderer(
         GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
         for (eye in 0..1) {
             val r = fitRect(eyeW.toFloat(), viewH.toFloat())
+            lastRectH = r[3]
+            lastViewH = viewH
             val side = if (eye == 0) -1f else 1f
             // ipd < 0:兩眼畫面往中間靠;ipd > 0:往外拉開
             val shift = ipd * eyeW * side
@@ -611,15 +613,17 @@ class VrRenderer(
             } else {
                 val z = zoom
                 val vy = cy + lift * viewH
+                val px = if (m == MODE_2D) panX * r[2] * z else 0f
                 GLES20.glViewport(
-                    (cx - r[2] * z / 2f).toInt(), (vy - r[3] * z / 2f).toInt(),
+                    (cx - r[2] * z / 2f - px).toInt(), (vy - r[3] * z / 2f).toInt(),
                     (r[2] * z).toInt(), (r[3] * z).toInt()
                 )
                 drawVideo(distortion, 0f, sx, sy, ox, oy)
             }
             // 控制面板與游標不放大、不移動,確保完整看得到;
             // 面板距離:左眼往右、右眼往左移 = 面板看起來較近
-            val ocx = cx - side * panelDepth * eyeW
+            // 只有紅點(沒有面板)時放在和網頁同一個距離,才會「貼」在網頁上
+            val ocx = cx - side * (if (showPanel) panelDepth else 0f) * eyeW
             GLES20.glViewport((ocx - r[2] / 2f).toInt(), (cy - r[3] / 2f).toInt(), r[2].toInt(), r[3].toInt())
             drawOverlay()
         }
@@ -660,6 +664,23 @@ class VrRenderer(
         bindQuad(p.aPos, p.aUv)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
+
+    // 最近一次畫的單眼範圍高度(像素),紅點換算網頁位置用
+    @Volatile private var lastRectH = 1f
+    @Volatile private var lastViewH = 1
+
+    /**
+     * VR 平面 2D 模式:疊加層(紅點)座標 → 網頁上的位置(0~1,y 向下)。
+     * 網頁畫面有放大(zoom)與往上移(lift),紅點不放大不移動,所以要換算。
+     */
+    fun pageAt(cx: Float, cy: Float): FloatArray {
+        val z = zoom.coerceAtLeast(0.1f)
+        val liftN = lift * lastViewH / lastRectH.coerceAtLeast(1f)
+        return floatArrayOf(0.5f + panX + (cx - 0.5f) / z, 0.5f + (cy - 0.5f + liftN) / z)
+    }
+
+    /** VR 網頁放大時左右移動(網頁寬度的比例,正 = 看右邊) */
+    @Volatile var panX = 0f
 
     /** 曲面巨幕:螢幕寬度 = 張開的角度,高度依影片比例 */
     private fun drawCurve(sx: Float, sy: Float, ox: Float, oy: Float, aspect: Float) {

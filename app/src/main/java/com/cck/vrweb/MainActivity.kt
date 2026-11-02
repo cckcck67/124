@@ -76,6 +76,11 @@ class MainActivity : Activity(), SensorEventListener {
 
         const val REQ_PICK_VIDEO = 11
         const val REQ_YOUTUBE = 12
+        const val WEB_YAW_RANGE = 0.9f     // VR 網頁紅點:左右轉頭約 ±26 度走完整個寬
+        const val WEB_PITCH_RANGE = 0.6f   //             上下約 ±17 度走完整個高(低頭 50 度才會叫出面板)
+        const val WEB_EDGE = 0.05f         //             紅點貼到最邊緣這一小段才捲動 / 縮放
+        val KNOCK_LEVELS = floatArrayOf(2.5f, 4f, 6f)        // 拍盒子靈敏度:高 / 中 / 低(加速度門檻 m/s²)
+        val KNOCK_NAMES = arrayOf("高(輕拍就有反應)", "中", "低(要拍用力一點)")
 
         const val SENSOR_PERIOD_US = 10_000   // 頭部感應器約每秒 100 次,在背景執行緒處理
 
@@ -376,6 +381,20 @@ class MainActivity : Activity(), SensorEventListener {
             addView(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
             addView(settingRow("Google 金鑰(空中遊覽):" +
                     if (prefs.getString("mapsKey", "").isNullOrBlank()) "未設定" else "已設定") { askMapsKey() })
+            addView(settingRow("拍盒子兩下點選的靈敏度:" + KNOCK_NAMES[prefs.getInt("knock", 1).coerceIn(0, 2)]) {
+                val dlg = AlertDialog.Builder(this@MainActivity)
+                    .setTitle("拍盒子兩下(VR 中代替點選)")
+                    .setSingleChoiceItems(KNOCK_NAMES, prefs.getInt("knock", 1).coerceIn(0, 2)) { d, i ->
+                        prefs.edit().putInt("knock", i).apply()
+                        knockThreshold = KNOCK_LEVELS[i]
+                        d.dismiss()
+                        showSettings()
+                    }
+                    .create()
+                dlg.setOnDismissListener { hideSystemBars() }
+                dlg.show()
+            })
+            addView(settingRow("Google 金鑰申請、帳單與用量上限教學") { showKeyHelp() })
             addView(settingRow("檢查更新(目前版本 ${versionName()})") {
                 Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
             })
@@ -607,6 +626,10 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        if (pendingVr && newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            pendingVr = false
+            handler.postDelayed({ setVr(true) }, 400)   // 等網頁換成橫式排版
+        }
         if (vrMode) reverseLandscape = displayRotation() == Surface.ROTATION_270
         updatePageSize()
     }
@@ -684,21 +707,26 @@ class MainActivity : Activity(), SensorEventListener {
         listOf(
             Setting("gain", "轉頭比例", 0.05f, 0.2f, 1.5f, "%.2f", { 0.7f }) { flyGain = it; lastYtYaw = 999f },
             Setting("speed", "飛行速度", 0.25f, 0.25f, 3f, "%.2f倍", { 1f }) { flySpeed = it; sendFlightConfig() },
-            Setting("alt", "飛行高度", 0.1f, 0.5f, 2.5f, "%.1f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
+            Setting("alt", "飛行高度", 0.05f, 0.13f, 4f, "%.2f倍", { 1f }) { flyAlt = it; sendFlightConfig() },
         ) + flatSettings
     }
+
+    private var wasLanded = false
 
     /** 面板第一層的「飛快 / 飛高 ±」:改空中遊覽的速度 / 高度設定 */
     private fun bumpFlight(key: String, dir: Int) {
         val st = flightSettings.firstOrNull { it.key == key } ?: return
-        val v = (settingValue(st) + dir * st.step).coerceIn(st.min, st.max)
+        // 飛高 / 飛低:每按一次高度變 1.3 倍,看得出差別
+        val cur = settingValue(st)
+        val v = (if (key == "alt") (if (dir > 0) cur * 1.3f else cur / 1.3f) else cur + dir * st.step)
+            .coerceIn(st.min, st.max)
         prefs.edit().putFloat(prefKey(st), v).apply()
         st.apply(v)
         pollStatus()
     }
 
     private fun sendFlightConfig() {
-        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode)")
+        if (screen == SCREEN_FLIGHT) presentation?.run("window.vrFlightConfig&&vrFlightConfig($flySpeed,$flyAlt,$vrMode,$flyGain)")
     }
 
     private fun modeSettings(m: Int) = when {
@@ -854,12 +882,52 @@ class MainActivity : Activity(), SensorEventListener {
             .setTitle("Google 地圖錯誤")
             .setMessage("$why\n\n(錯誤代碼:$code)")
             .setPositiveButton("知道了", null)
+            .setNeutralButton("看教學") { _, _ -> showKeyHelp() }
             .create()
         dlg.setOnDismissListener { hideSystemBars() }
         dlg.show()
     }
 
     private var pendingMapError: String? = null
+
+    /** Google 金鑰申請、綁定帳單、設定用量上限的教學(在電腦上照著做比較方便) */
+    private fun showKeyHelp() {
+        val text = """
+一、申請金鑰(約 10 分鐘,建議用電腦)
+1. 開 console.cloud.google.com,用 Google 帳號登入。
+2. 上方「選取專案」→「新增專案」,名稱隨意(例如 VR遊覽)→ 建立,並切換到這個專案。
+3. 左上 ☰ →「API 和服務」→「程式庫」,搜尋並「啟用」:
+   ・Maps JavaScript API(2D 地圖、街景)
+   ・Map Tiles API(3D 空拍)
+4. 「API 和服務」→「憑證」→「建立憑證」→「API 金鑰」,複製金鑰。
+5. 點這把金鑰 →「應用程式限制」選「網站」,加入:
+   https://appassets.androidplatform.net/*
+   「API 限制」勾選上面兩個 API → 儲存。(別人拿到金鑰也不能亂用)
+6. 回到本 App:設定 →「Google 金鑰」→ 貼上 → 儲存。
+
+二、綁定帳單(街景、2D 地圖正常顯示需要)
+1. ☰ →「帳單」→「連結帳單帳戶」→「建立帳單帳戶」。
+2. 國家選台灣,填信用卡資料 → 完成,確認專案已連結到這個帳單帳戶。
+3. Google 地圖每個功能每月有免費用量;自己和家人試用通常用不完。實際額度以 Google「Maps Platform 價格」頁面為準。
+
+三、設定用量上限(保證不會被收錢,最重要)
+1. ☰ →「API 和服務」→「已啟用的 API 和服務」→ 點「Maps JavaScript API」→「配額與系統限制」。
+2. 找名稱有「per day / 每天」的項目(例如每天地圖載入次數、街景載入次數)→ 勾選 →「編輯配額」→ 設成小數字,例如 300 → 送出。
+3. 「Map Tiles API」也照同樣方式,每天的上限設小一點(例如 300)。
+   超過上限只會當天載不出來,不會繼續計費。
+4. 再加一道提醒:☰ →「帳單」→「預算與快訊」→「建立預算」→ 金額填 NT$30 → 50%、90%、100% 寄信通知。
+   (預算只會寄信提醒,不會自動停用;真正擋住費用的是第 1~3 步的每天上限)
+
+畫面名稱可能和這裡寫的略有不同,卡住時截圖給開發者看。""".trimIndent()
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Google 金鑰教學")
+            .setMessage(text)
+            .setPositiveButton("設定金鑰") { _, _ -> askMapsKey() }
+            .setNegativeButton("關閉", null)
+            .create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
 
     // ---------------- 書籤 ----------------
 
@@ -995,8 +1063,14 @@ class MainActivity : Activity(), SensorEventListener {
         virtualDisplay = vd
         presentation = WebPresentation(this, vd.display, pageW, pageH).also {
             it.appKey = { prefs.getString("mapsKey", "") ?: "" }
-            it.onAppCommand = { cmd -> if (cmd == "key") askMapsKey() }
+            it.onAppCommand = { cmd ->
+                when (cmd) {
+                    "key" -> askMapsKey()
+                    "keyhelp" -> showKeyHelp()
+                }
+            }
             it.onMapError = { code -> handler.post { showMapError(code) } }
+            it.onRendererGone = { url -> handler.post { onWebCrashed(url) } }
             it.onUrlChanged = { url -> checkYouTubeVr(url) }
             it.onFullscreen = { on -> onWebFullscreen(on) }
             it.show()
@@ -1025,6 +1099,30 @@ class MainActivity : Activity(), SensorEventListener {
         p.videoStatus { st -> recreateWeb(p.currentUrl ?: "about:blank", st?.current ?: -1.0) }
     }
 
+    /** 網頁被系統關掉(記憶體不足):重建網頁回到原本的網址,App 不閃退 */
+    private var lastCrashAt = 0L
+    private fun onWebCrashed(url: String?) {
+        val now = SystemClock.uptimeMillis()
+        val again = now - lastCrashAt < 60_000
+        lastCrashAt = now
+        if (vrMode) setVr(false)
+        // 一分鐘內又被關掉:先停在空白頁,避免一直重開
+        recreateWeb(if (again) "about:blank" else (url ?: "about:blank"), -1.0)
+        val tip = if (quality >= QUALITY_4K) "建議到設定把畫質改成 1440p。" else "可以關掉其他 App 再試。"
+        toast("手機記憶體不足,網頁被系統關掉,已重新載入。$tip")
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // 手機記憶體很緊時提醒(4K 畫質最吃記憶體)
+        @Suppress("DEPRECATION")
+        if (level == TRIM_MEMORY_RUNNING_CRITICAL && quality >= QUALITY_4K && !memTipShown) {
+            memTipShown = true
+            toast("手機記憶體快不夠了,建議把畫質改成 1440p")
+        }
+    }
+    private var memTipShown = false
+
     private fun recreateWeb(url: String, at: Double) {
         val q = quality
         presentation?.release()
@@ -1045,6 +1143,7 @@ class MainActivity : Activity(), SensorEventListener {
             val p = presentation
             if (p != null) {
                 if (screen == SCREEN_FLIGHT) sendFlightConfig()   // 飛行速度 / 高度(網頁重新載入後也要再給)
+                if (vrMode && !menuOpen) checkVideoEnd()          // 影片播完:跳出重播 / 回到網頁 / 離開 VR
                 if (!vrMode && screen == SCREEN_WEB) {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
@@ -1080,7 +1179,22 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ---------------- 模式切換 ----------------
 
+    private var pendingVr = false
+    @Volatile private var resumeAfterCenter = false   // 進 VR 時暫停的影片,置中倒數完再繼續
+
     private fun setVr(on: Boolean) {
+        // 直式全螢幕直接進 VR 會錯亂:先轉成橫式,轉好再進 VR(和橫式全螢幕進 VR 一樣)
+        if (on && !vrMode && screen == SCREEN_WEB && presentation?.isFullscreen == true &&
+            resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) {
+            pendingVr = true
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            handler.postDelayed({ if (pendingVr) { pendingVr = false; setVr(true) } }, 2000)
+            return
+        }
+        pendingVr = false
+        if (!on) { stopWebCursor(); resumeAfterCenter = false }
+        endShown = false
+        presentation?.endGuard(on && screen != SCREEN_FLIGHT)
         vrMode = on
         renderer.vrMode = on
         renderer.showCursor = false
@@ -1090,7 +1204,11 @@ class MainActivity : Activity(), SensorEventListener {
                                else ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         updatePageSize()
         updateTopBar()
-        menu.buttons = if (screen == SCREEN_FLIGHT) VrMenu.FLIGHT_BUTTONS else VrMenu.VIDEO_BUTTONS
+        menu.buttons = when (screen) {
+            SCREEN_FLIGHT -> VrMenu.FLIGHT_BUTTONS
+            SCREEN_WEB -> VrMenu.WEB_VIDEO_BUTTONS
+            else -> VrMenu.VIDEO_BUTTONS
+        }
         sendFlightConfig()   // 空中遊覽:告訴網頁現在是 VR(轉頭看)還是 2D(手勢)
         menu.infoText = null
         reverseLandscape = displayRotation() == Surface.ROTATION_270
@@ -1107,6 +1225,11 @@ class MainActivity : Activity(), SensorEventListener {
         }
         if (!on) pendingMapError?.let { code -> pendingMapError = null; handler.post { showMapError(code) } }
         if (on) {
+            // 影片正在播:先暫停,置中倒數完再繼續播(倒數時不會錯過內容)
+            resumeAfterCenter = false
+            if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) presentation?.videoStatus { st ->
+                if (st != null && !st.paused && vrMode) { presentation?.pauseAll(); resumeAfterCenter = true }
+            }
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
         }
@@ -1122,7 +1245,7 @@ class MainActivity : Activity(), SensorEventListener {
         // 空中遊覽:轉頭控制 3D 地圖看的方向(用環顧模式,整頁顯示)
         if (screen == SCREEN_FLIGHT) {
             if (renderer.mode != VrRenderer.MODE_YT) setMode(VrRenderer.MODE_YT)
-            handler.postDelayed({ if (vrMode) showMessage("空中遊覽", "轉頭看看", 2500) }, ENTER_DELAY_MS + 300)
+            handler.postDelayed({ if (vrMode) showMessage("移動頭部體驗", "", 2500) }, ENTER_DELAY_MS + 300)
             return
         }
         // YouTube 的 360 / VR180 影片 → 環顧(轉頭控制 YouTube 看的方向)
@@ -1208,6 +1331,13 @@ class MainActivity : Activity(), SensorEventListener {
      */
     private fun onWebFullscreen(on: Boolean) {
         val p = presentation ?: return
+        // VR 中用紅點點開影片的全螢幕:結束網頁操作,回到看影片
+        if (on && vrMode && webCursor) {
+            stopWebCursor()
+            endShown = false
+            handler.postDelayed({ if (vrMode) autoDetectMode() }, 600)
+            return
+        }
         if (!on || vrMode || screen != SCREEN_WEB) return
         val url = p.currentUrl
         val id = youtubeId(url) ?: return
@@ -1403,6 +1533,7 @@ class MainActivity : Activity(), SensorEventListener {
     /** 背景執行緒(VR-Sensor):算頭部方向,球面模式直接更新渲染用的矩陣 */
     override fun onSensorChanged(event: SensorEvent) {
         if (!vrMode) return
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) { detectKnock(event); return }
         val r = rot
         SensorManager.getRotationMatrixFromVector(r, event.values)
         // 手機裝置座標軸在世界座標(東、北、上)中的方向
@@ -1432,6 +1563,8 @@ class MainActivity : Activity(), SensorEventListener {
             recenter = false
             recenterAt = 0L
             renderer.showHud = false
+            if (screen == SCREEN_FLIGHT) handler.post { presentation?.run("window.vrRecentered&&vrRecentered()") }
+            if (resumeAfterCenter) { resumeAfterCenter = false; handler.post { if (vrMode) presentation?.play() } }
             redraw()
         }
 
@@ -1465,6 +1598,20 @@ class MainActivity : Activity(), SensorEventListener {
         // 面板打開時畫面不動,紅點才不會因為網頁忙著轉畫面而亂飄
         if (renderer.mode == VrRenderer.MODE_YT && !menuOpen) youtubeLook(az, down)
 
+        // ---- 影片播完的選單:不用低頭,紅點跟著頭在選單上移動 ----
+        if (menuOpen && menu.endPage) {
+            var eYaw = az - menuAz
+            if (eYaw > PI) eYaw -= (2 * PI).toFloat()
+            if (eYaw < -PI) eYaw += (2 * PI).toFloat()
+            val ex = (0.5f + eYaw / MENU_YAW_RANGE * (VrMenu.X1 - VrMenu.X0)).coerceIn(VrMenu.X0, VrMenu.X1)
+            val ey = ((VrMenu.Y0 + VrMenu.Y1) / 2f + (down - endDown) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
+                .coerceIn(VrMenu.Y0, VrMenu.Y1)
+            smoothCursor(ex, ey)
+            updateMenu(SystemClock.uptimeMillis())
+            redraw()
+            return@Runnable
+        }
+
         // ---- 控制面板:坐姿低頭打開、躺平抬頭打開,回到正前方附近就關閉 ----
         val lying = VrMenu.lying
         val tilt = if (lying) -down else down
@@ -1472,9 +1619,13 @@ class MainActivity : Activity(), SensorEventListener {
         val yt = renderer.mode == VrRenderer.MODE_YT
         val openAt = if (!lying) SIT_OPEN else if (yt) LIE_OPEN_YT else if (sphere) LIE_OPEN else LIE_OPEN_FLAT
         val closeAt = if (!lying) SIT_CLOSE else if (yt) LIE_CLOSE_YT else if (sphere) LIE_CLOSE else LIE_CLOSE_FLAT
-        if (!menuOpen && tilt > openAt) setMenu(true)
+        if (!panelArmed && tilt < closeAt) panelArmed = true   // 頭抬回來之後,低頭才會再叫出面板
+        if (!menuOpen && tilt > openAt && panelArmed) setMenu(true)
         else if (menuOpen && tilt < closeAt) setMenu(false)
-        if (!menuOpen) return@Runnable
+        if (!menuOpen) {
+            if (webCursor) updateWebCursor(az, down)
+            return@Runnable
+        }
 
         var dYaw = az - menuAz
         if (dYaw > PI) dYaw -= (2 * PI).toFloat()
@@ -1484,15 +1635,207 @@ class MainActivity : Activity(), SensorEventListener {
         val dir = if (lying) -1f else 1f
         val ty = (VrMenu.START_Y + dir * (tilt - openAt) / MENU_Y_RANGE * (VrMenu.Y1 - VrMenu.Y0))
             .coerceIn(VrMenu.Y0, VrMenu.Y1)
-        // 依經過時間平滑,不受感應器頻率影響
+        smoothCursor(tx, ty)
+        updateMenu(SystemClock.uptimeMillis())
+        redraw()
+    }
+
+    /** 紅點依經過時間平滑移動,不受感應器頻率影響 */
+    private fun smoothCursor(tx: Float, ty: Float) {
         val now = SystemClock.uptimeMillis()
         val dt = ((now - lastCursorAt).coerceIn(1L, 100L)) / 1000f
         lastCursorAt = now
         val k = 1f - kotlin.math.exp(-dt / CURSOR_TAU)
         renderer.cursorX += (tx - renderer.cursorX) * k
         renderer.cursorY += (ty - renderer.cursorY) * k
-        updateMenu(now)
+    }
+
+    // ---------------- 影片播完選單 / VR 中用紅點操作網頁 ----------------
+
+    private var endShown = false      // 這部影片已經跳出過「播完」選單
+    private var endDown = 0f          // 選單打開時的低頭角度(紅點上下以此為中心)
+    private var lastEndPoll = 0L
+
+    /** VR 中定時檢查影片是否播完(停在最後):跳出重播 / 回到網頁 / 離開 VR */
+    private fun checkVideoEnd() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastEndPoll < 700) return
+        lastEndPoll = now
+        if (screen != SCREEN_WEB && screen != SCREEN_VIDEO) return
+        if (renderer.mode == VrRenderer.MODE_YT || webCursor) return
+        val p = presentation ?: return
+        p.endGuard(true)   // 新出現的影片也要裝上
+        p.videoStatus { st ->
+            if (st == null || !vrMode || webCursor) return@videoStatus
+            val atEnd = st.paused && st.duration > 5 && st.current >= st.duration - 0.8
+            if (!atEnd) { if (st.current < st.duration - 2) endShown = false; return@videoStatus }
+            if (endShown || (menuOpen && !menu.endPage)) return@videoStatus
+            endShown = true
+            openEndPanel()
+        }
+    }
+
+    private fun openEndPanel() {
+        setMenu(true)
+        menu.endPage = true
+        endDown = sensorDown
+        menuAz = lastAz
+        renderer.cursorX = 0.5f
+        renderer.cursorY = (VrMenu.Y0 + VrMenu.Y1) / 2f
+        redrawPanel(force = true)
+        showMessage("影片播完了", "看著圖示,拍盒子兩下", 3000)
+    }
+
+    // VR 中操作網頁:紅點跟著頭,碰到上下邊緣捲動,快速拍盒子兩下 = 點選
+    private var webCursor = false
+    private var panelArmed = true   // 從面板按「網頁」後先不要馬上又叫出面板
+    private var webRefAz = 0f
+    private var webRefDown = 0f
+    private var lastScrollAt = 0L
+
+    private var webZoom = 1f        // VR 網頁的放大倍率(1 = 整頁剛好放進畫面)
+    private var edgeSince = 0L      // 紅點停在邊緣多久了(停一下才開始捲動,避免一靠近就動)
+
+    private fun startWebCursor() {
+        webCursor = true
+        webZoom = 1f
+        renderer.zoom = webZoom
+        renderer.panX = 0f
+        webRefAz = 0f      // 紅點中心 = 正前方(從面板低頭選的時候,頭抬回來紅點就在中間)
+        webRefDown = 0f
+        renderer.cursorX = 0.5f
+        renderer.cursorY = 0.5f
+        renderer.showCursor = true
+        showMessage("紅點跟著頭", "上下邊緣捲動・左右邊緣拍兩下縮放", 4000)
         redraw()
+    }
+
+    private fun stopWebCursor() {
+        if (!webCursor) return
+        webCursor = false
+        renderer.panX = 0f
+        applySettings()   // 回到這個模式原本的畫面大小
+        renderer.showCursor = menuOpen
+        redraw()
+    }
+
+    // 紅點最近的位置(拍盒子會晃到手機,點選時用拍之前的位置)
+    private val cursorHist = ArrayDeque<FloatArray>()
+
+    private fun cursorBefore(ms: Long): FloatArray {
+        val target = SystemClock.uptimeMillis() - ms
+        var best: FloatArray? = null
+        for (h in cursorHist) if (h[2] <= target) best = h
+        return best ?: floatArrayOf(renderer.cursorX, renderer.cursorY, 0f)
+    }
+
+    private fun updateWebCursor(az: Float, down: Float) {
+        var dYaw = az - webRefAz
+        if (dYaw > PI) dYaw -= (2 * PI).toFloat()
+        if (dYaw < -PI) dYaw += (2 * PI).toFloat()
+        val tx = (0.5f + dYaw / WEB_YAW_RANGE).coerceIn(0.02f, 0.98f)
+        val ty = (0.5f + (down - webRefDown) / WEB_PITCH_RANGE).coerceIn(0.02f, 0.98f)
+        smoothCursor(tx, ty)
+        renderer.showCursor = true
+        cursorHist.addLast(floatArrayOf(renderer.cursorX, renderer.cursorY, SystemClock.uptimeMillis().toFloat()))
+        while (cursorHist.size > 120) cursorHist.removeFirst()
+        // 紅點貼到最邊緣、停一下(0.35 秒)才動:上 / 下 = 捲動網頁;放大時左 / 右 = 左右移動
+        val now = SystemClock.uptimeMillis()
+        val cx = renderer.cursorX
+        val cy = renderer.cursorY
+        val edge = cy < WEB_EDGE || cy > 1f - WEB_EDGE || (webZoom > 1.01f && (cx < WEB_EDGE || cx > 1f - WEB_EDGE))
+        if (!edge) edgeSince = 0L
+        else if (edgeSince == 0L) edgeSince = now
+        if (edge && now - edgeSince > 350 && now - lastScrollAt > 50) {
+            lastScrollAt = now
+            if (cy < WEB_EDGE || cy > 1f - WEB_EDGE) {
+                val px = (pageH * 0.012f).toInt().coerceAtLeast(4)
+                presentation?.scrollBy(if (cy < WEB_EDGE) -px else px)
+            } else {
+                val maxPan = 0.5f - 0.5f / webZoom
+                renderer.panX = (renderer.panX + (if (cx > 0.5f) 0.008f else -0.008f)).coerceIn(-maxPan, maxPan)
+            }
+        }
+        redraw()
+    }
+
+    // ---------------- 快速拍盒子兩下 = 點選 ----------------
+
+    private val knockGravity = FloatArray(3)
+    private var knockInit = false
+    private var knockLast = 0L
+    private var knockFirst = 0L
+
+    /** 背景執行緒:加速度突然尖峰兩次(間隔 0.12~0.6 秒)= 拍了盒子兩下 */
+    private fun detectKnock(e: SensorEvent) {
+        val a = e.values
+        if (!knockInit) {
+            for (i in 0..2) knockGravity[i] = a[i]
+            knockInit = true
+            return
+        }
+        var sum = 0f
+        for (i in 0..2) {
+            knockGravity[i] = 0.9f * knockGravity[i] + 0.1f * a[i]
+            val hp = a[i] - knockGravity[i]
+            sum += hp * hp
+        }
+        val t = e.timestamp / 1_000_000L
+        if (kotlin.math.sqrt(sum) < knockThreshold || t - knockLast < 90) return
+        knockLast = t
+        if (t - knockFirst in 120L..600L) {
+            knockFirstUptime = SystemClock.uptimeMillis() - (t - knockFirst)
+            knockFirst = 0L
+            handler.post { onBoxDoubleTap() }
+        } else knockFirst = t
+    }
+
+    private var knockThreshold = 4f
+    @Volatile private var knockFirstUptime = 0L
+
+    private fun onBoxDoubleTap() {
+        if (!vrMode) return
+        buzz()
+        val p = presentation ?: return
+        if (menuOpen) {   // 面板 / 播完選單:直接按下紅點指著的按鈕
+            val t = menu.hover
+            if (t != VrMenu.NONE) {
+                activate(t)
+                dwellDone = true
+                menu.dwell = 0f
+                redrawPanel(force = true)
+            }
+            return
+        }
+        if (webCursor) {
+            // 拍盒子兩下大約花 0.3~0.6 秒,手機會跟著晃:用第一下之前的紅點位置
+            val pos = cursorBefore(SystemClock.uptimeMillis() - knockFirstUptime + 80)
+            val cx = pos[0]
+            // 紅點在右邊緣拍兩下 = 放大網頁,左邊緣 = 縮小
+            if (cx > 1f - WEB_EDGE || cx < WEB_EDGE) {
+                webZoom = (if (cx > 0.5f) webZoom * 1.25f else webZoom / 1.25f).coerceIn(1f, 3f)
+                renderer.zoom = webZoom
+                val maxPan = 0.5f - 0.5f / webZoom
+                renderer.panX = renderer.panX.coerceIn(-maxPan, maxPan)
+                redraw()
+                return
+            }
+            // 網頁:在紅點的位置點一下
+            val uv = renderer.pageAt(pos[0], pos[1])
+            if (uv[0] in 0f..1f && uv[1] in 0f..1f) p.tap(uv[0] * pageW, uv[1] * pageH)
+            return
+        }
+        if (screen == SCREEN_FLIGHT) { p.run("window.vrKnock&&vrKnock()"); return }   // 空中遊覽 / 街景:轉身或前進
+        if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) p.togglePlay()   // 看影片時:播放 / 暫停
+    }
+
+    /** 短短震兩下,讓使用者知道拍盒子有收到 */
+    private fun buzz() {
+        try {
+            @Suppress("DEPRECATION")
+            val v = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+            v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 30, 60, 30), -1))
+        } catch (e: Exception) {}
     }
 
     // 環顧(空中遊覽):把頭的方向傳給網頁(最多約每秒 30 次,沒變就不送)
@@ -1529,6 +1872,7 @@ class MainActivity : Activity(), SensorEventListener {
         menu.hover = VrMenu.NONE
         menu.popup = VrMenu.NONE
         menu.settingsPage = false
+        menu.endPage = false
         menu.dwell = 0f
         dwellDone = false
         redraw()
@@ -1559,7 +1903,8 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         val need = if (t == VrMenu.BAR) DWELL_BAR_MS else DWELL_MS
-        menu.dwell = if (t == VrMenu.NONE || dwellDone) 0f
+        // 播完選單:只用拍盒子兩下點選(看著不會自動按下)
+        menu.dwell = if (t == VrMenu.NONE || dwellDone || menu.endPage) 0f
         else ((now - hoverStart).toFloat() / need).coerceIn(0f, 1f)
 
         if (t != VrMenu.NONE && !dwellDone && menu.dwell >= 1f) {
@@ -1596,6 +1941,28 @@ class MainActivity : Activity(), SensorEventListener {
                 return
             }
             VrMenu.BTN_FWD -> p.seekBy(10)
+            // 影片播完選單
+            VrMenu.BTN_END_REPLAY -> {
+                setMenu(false)
+                endShown = false
+                p.seekTo(0f)
+                handler.postDelayed({ p.togglePlay() }, 300)
+                return
+            }
+            VrMenu.BTN_WEB, VrMenu.BTN_END_WEB -> {
+                setMenu(false)
+                panelArmed = false
+                p.exitFullscreen()
+                p.pauseAll()
+                if (renderer.mode != VrRenderer.MODE_2D) setMode(VrRenderer.MODE_2D)
+                startWebCursor()
+                return
+            }
+            VrMenu.BTN_END_EXIT -> {
+                setMenu(false)
+                setVr(false)
+                return
+            }
             // 空中遊覽
             VrMenu.BTN_FLY_PAUSE -> { p.run("window.vrFlight&&vrFlight('pause')"); menu.flyPaused = !menu.flyPaused }
             VrMenu.BTN_FLY_RESTART -> p.run("window.vrFlight&&vrFlight('restart')")
@@ -1733,6 +2100,9 @@ class MainActivity : Activity(), SensorEventListener {
                 menu.flyPaused = o?.optBoolean("paused") == true
                 menu.flyLanded = o?.optBoolean("landed") == true
                 menu.walking = o?.optBoolean("walking") == true
+                // 剛降落到街景:提示一下
+                if (menu.flyLanded && !wasLanded && vrMode) showMessage("移動頭部體驗", "", 3000)
+                wasLanded = menu.flyLanded
                 // 降落到街景:面板換成散步用的按鈕;起飛後換回飛行按鈕
                 val want = if (menu.flyLanded) VrMenu.WALK_BUTTONS else VrMenu.FLIGHT_BUTTONS
                 if (!menu.buttons.contentEquals(want)) { menu.buttons = want; menu.hover = VrMenu.NONE }
@@ -1745,6 +2115,7 @@ class MainActivity : Activity(), SensorEventListener {
                         o.optBoolean("arrived") -> "  已抵達"
                         else -> ""
                     } + (if (menu.flyPaused && !menu.flyLanded) "  已暫停" else "") +
+                    (if (o.optBoolean("loading")) "  地圖載入中…" else "") +
                     "  速度 %.2f倍  高度 %.1f倍".format(flySpeed, flyAlt)
                 redrawPanel(force = true)
             }
@@ -1783,6 +2154,12 @@ class MainActivity : Activity(), SensorEventListener {
         val t = HandlerThread("VR-Sensor").also { it.start() }
         sensorThread = t
         s?.let { sensorManager.registerListener(this, it, SENSOR_PERIOD_US, Handler(t.looper)) }
+        // 加速度:偵測快速拍盒子兩下(要取樣快一點才抓得到短短的尖峰)
+        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager.registerListener(this, it, 5_000, Handler(t.looper))
+        }
+        knockInit = false
+        knockThreshold = KNOCK_LEVELS[prefs.getInt("knock", 1).coerceIn(0, KNOCK_LEVELS.size - 1)]
         redraw()
         ticking = true
         handler.post(tick)

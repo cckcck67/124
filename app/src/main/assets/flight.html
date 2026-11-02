@@ -9,8 +9,8 @@
   #map { position: fixed; inset: 0; }
   /* Google 地圖 / 街景會在容器上直接加 position: relative,蓋掉 fixed 後高度變 0(只看到一片黑或後面的 3D 地圖),
      所以用 !important 固定位置與大小 */
-  #sv, #pick { position: fixed !important; left: 0; top: 0; width: 100vw !important; height: 100vh !important; z-index: 1; }
-  #sv, #pick { display: none; }
+  #sv, #sv2, #pick { position: fixed !important; left: 0; top: 0; width: 100vw !important; height: 100vh !important; z-index: 1; }
+  #sv, #sv2, #pick { display: none; }
   #menu { position: fixed; z-index: 5; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
           gap: 2vh; background: #111; overflow-y: auto; padding: 2vh 0; box-sizing: border-box; }
   #menu h1 { margin: 0; font-size: 6vmin; }
@@ -25,12 +25,6 @@
   #title { position: fixed; left: 0; right: 0; top: 3vh; text-align: center; font-size: 5vmin; z-index: 20;
            text-shadow: 0 0 1vh #000, 0 0 2vh #000; pointer-events: none; transition: opacity 2s; }
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.6s; z-index: 10; }
-  /* 凝視地面前進:畫面下方的箭頭 + 慢慢填滿的圓圈 */
-  #gaze { position: fixed; left: 50%; bottom: 14vh; width: 18vmin; height: 18vmin; margin-left: -9vmin; border-radius: 50%;
-          display: none; z-index: 8; pointer-events: none; align-items: center; justify-content: center;
-          background: conic-gradient(#ffd040 var(--p, 0%), rgba(255,255,255,0.25) 0); }
-  #gaze span { width: 14vmin; height: 14vmin; border-radius: 50%; background: rgba(0,0,0,0.65); color: #ffd040;
-               display: flex; align-items: center; justify-content: center; font-size: 9vmin; }
   #err { position: fixed; left: 4vw; right: 4vw; bottom: 16vh; z-index: 2147483647; display: none; padding: 2vmin; border-radius: 1.5vmin;
          background: rgba(80,20,20,0.92); color: #fff; font-size: 3.6vmin; text-align: center; pointer-events: none; }
   #pickBar, #ctl { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 2vmin; justify-content: center;
@@ -50,6 +44,7 @@
 <body>
 <div id="map"></div>
 <div id="sv"></div>
+<div id="sv2"></div>
 <div id="pick"></div>
 <div id="cross"></div>
 <div id="pickHint">拖動、縮放地圖,讓中間的紅色十字對準想去的地方(點一下也會移過去)</div>
@@ -75,7 +70,7 @@
 </div>
 <div id="title"></div>
 <div id="fade"></div>
-<div id="gaze"><span id="gazeArrow">⬆</span></div>
+<div id="turnHint"></div>
 <div id="err"></div>
 <div id="menu">
   <h1>空中遊覽</h1>
@@ -99,17 +94,30 @@ var START_FAR = 3;       // 從 3 倍懸停距離的地方出發
 var M_PER_DEG = 111320;
 
 var key = '', map = null, place = null;
+var mapSteady = false, waitSteady = false, steadyFrom = 0;   // 等 3D 地圖載好再開始飛
 var leg = 0;             // 第幾個方向接近(每次「換角度」轉 90 度)
 var progress = 0;        // 0 = 出發點,1 = 懸停點
 var paused = false, last = 0, looping = false;
-var speed = 1, altScale = 1;
+var speed = 1, altScale = 1, altNow = 1;   // altNow 慢慢追上 altScale(飛高 / 飛低不會突然跳)
+var MIN_ABOVE = 40;                         // 飛低的下限:至少離地標頂端 40 公尺
 var vr = false;                   // App 是否在 VR 模式(VR 裡轉頭看,2D 用手勢)
 var manual = false;               // 2D 時用手勢移動了地圖:自動飛行先停住,不再蓋掉手勢
 var lookYaw = 0, lookPitch = 0;   // 轉頭角度(度):向右、向上為正,由 App 傳入
 var landed = false, pano = null, panoBase = 0;   // 降落後的街景與預設面向
 var landPano = '';                // 降落時的街景點(回降落點用)
+// VR 轉向(街景與空中飛行共用):頭轉超過 20 度才開始慢慢轉畫面,每次轉頭最多轉 90 度,
+// 頭回到中間才能再轉;頭偏在一邊時拍盒子兩下 = 自動慢慢轉 90 度(轉身),轉完以當時的頭為正中間
+// 頭轉 40 度以內畫面完全不動(像看電影);超過並停 2 秒才很慢地轉(每秒最多 6 度);
+// 轉動中頭一往回轉就停,並以當下看的方向為新的中心(畫面不動);以正前方為準左右各最多 60 度,
+// 更多就拍兩下轉身(自動慢慢轉 90 度)
+var TURN_DEAD = 40, TURN_HOLD = 2000, TURN_SPEED = 0.3, TURN_MAX = 6, TURN_RANGE = 60, AUTO_TURN_SEC = 5;
+var yawRef = 0, autoTurn = null, lookGain = 1, sideSince = 0;
+var holdSince = 0, turning = false, peakYaw = 0;   // 轉頭超過門檻後停留多久、轉動中頭最偏的角度
+var viewOffset = 0;               // 轉頭看到的偏移(-90 ~ 90 度)
+var flightHome = 0;               // 空中飛行 VR:轉身累積的方向
+var svPitch = 0;                  // 街景 VR 上下看的角度(平滑過)
 var pendingFace = false;          // 降落後等路的資料出來,再決定要不要轉向
-var walkAuto = false, walkSec = 4, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
+var walkAuto = false, walkSec = 6, lastStep = 0;   // 自動散步:每 walkSec 秒往前走一步
 var pickMap = null;
 
 function $(id) { return document.getElementById(id); }
@@ -176,7 +184,8 @@ window.gm_authFailure = function () {
 window.vrSetKey = function (k) {
   key = k || '';
   if (!key) {
-    msg('還沒有設定 Google 金鑰<br><button onclick="location.href=\'vrweb://key\'">設定金鑰</button>');
+    msg('還沒有設定 Google 金鑰(空中遊覽要用)<br><button onclick="location.href=\'vrweb://key\'">設定金鑰</button> ' +
+        '<button onclick="location.href=\'vrweb://keyhelp\'">怎麼申請金鑰</button>');
     return;
   }
   msg('');
@@ -184,12 +193,15 @@ window.vrSetKey = function (k) {
 
 // App 傳入頭的方向、飛行設定(速度、高度、是否在 VR)、指令
 window.vrLook = function (yaw, pitch) { lookYaw = yaw; lookPitch = pitch; };
-window.vrFlightConfig = function (s, a, v) {
+window.vrFlightConfig = function (s, a, v, g) {
   speed = s; altScale = a;
+  if (g) lookGain = g;
   if (v === undefined || !!v === vr) return;
   vr = !!v;
   if (vr) manual = false;      // VR 裡沒辦法用手勢,回到自動飛行
   else { lookYaw = 0; lookPitch = 0; }
+  // 街景的箭頭:VR 時不顯示(按不到又擋畫面),2D 時可以點著走
+  [pano, back].forEach(function (p) { if (p) p.setOptions({ linksControl: !vr, clickToGo: !vr }); });
   refreshCtl();
 };
 window.vrFlight = function (cmd) {
@@ -207,8 +219,8 @@ window.vrFlight = function (cmd) {
     return true;
   }
   if (cmd === 'pause') { if (manual) resume(); else paused = !paused; }
-  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; });
-  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; });
+  else if (cmd === 'restart') fadeTo(function () { progress = 0; paused = false; manual = false; holdForLoad(); });
+  else if (cmd === 'next') fadeTo(function () { leg++; progress = 0; paused = false; manual = false; holdForLoad(); });
   else if (cmd === 'resume') resume();
   refreshCtl();
   return true;
@@ -216,7 +228,8 @@ window.vrFlight = function (cmd) {
 // 面板顯示用的狀態
 window.vrFlightState = function () {
   return place ? { name: place.name, paused: paused || manual, arrived: progress >= 1, landed: landed, manual: manual,
-                   road: landed ? roadName() : '', walking: landed && walkAuto, walkSec: walkSec } : null;
+                   road: landed ? roadName() : '', walking: landed && walkAuto, walkSec: walkSec,
+                   loading: !landed && waitSteady } : null;
 };
 // 返回鍵:選地圖 → 回去;地面 → 起飛;手動移動中 → 回到航線;空中 → 目的地選單;已在選單回傳 false(App 回首頁)
 window.vrBack = function () {
@@ -239,7 +252,7 @@ window.gm_authFailure = function () {
 function showMenu() {
   landed = false;
   manual = false;
-  $('sv').style.display = 'none';
+  showSv(false);
   $('map').style.display = 'block';
   renderList();
   $('menu').style.display = 'flex';
@@ -328,7 +341,10 @@ function loadMaps() {
     var s = document.createElement('script');
     s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) +
             '&v=beta&libraries=maps3d&language=zh-TW&callback=__mapsReady';
-    s.onerror = function () { loading = null; fail(new Error('無法連線到 Google 地圖')); };
+    s.onerror = function () {
+      loading = null;
+      fail(new Error(navigator.onLine === false ? '手機沒有連上網路' : '無法連線到 Google 地圖,請確認網路'));
+    };
     document.head.appendChild(s);
   });
   return loading;
@@ -340,6 +356,7 @@ function go(p, walk) {
   landAfterLoad = !!walk;
   place = p;
   leg = 0; progress = 0; paused = false; landed = false; manual = false;
+  flightHome = 0; viewOffset = 0; autoTurn = null; yawRef = lookYaw;
   msg('載入中…');
   loadMaps().then(function () {
     return google.maps.importLibrary('maps3d');
@@ -349,20 +366,30 @@ function go(p, walk) {
       try { map = new lib.Map3DElement(Object.assign({ mode: 'SATELLITE', defaultUIHidden: true }, opts)); }
       catch (e) { map = new lib.Map3DElement(opts); }
       $('map').appendChild(map);
+      // 地圖畫面成形(圖塊載好)時會通知;還沒成形就先不要飛,避免一邊飛一邊糊
+      map.addEventListener('gmp-steadychange', function (e) { mapSteady = !!(e && e.isSteady); });
     }
     if (place !== p) return;   // 載入中又按了返回
     msg('');
-    $('sv').style.display = 'none';
+    showSv(false);
     $('map').style.display = 'block';
     $('menu').style.display = 'none';
     flash(p.name);
     refreshCtl();
+    holdForLoad();
     startLoop();
     if (landAfterLoad) { landAfterLoad = false; land(); }
   }).catch(function (e) {
     place = null;
     msg('無法載入 3D 地圖:' + (e && e.message ? e.message : e));
   });
+}
+
+// 換到新的位置後,先等地圖載好再開始飛
+function holdForLoad() {
+  mapSteady = false;
+  waitSteady = true;
+  steadyFrom = performance.now();
 }
 
 // 只跑一個動畫迴圈
@@ -390,6 +417,69 @@ function resume() {
 
 function ease(x) { return x * x * (3 - 2 * x); }   // 起步、停下都慢慢來
 
+// 頭實際轉了幾度(扣掉轉頭比例、以上次轉身後的方向為中間)
+function headYaw() { return (lookYaw - yawRef) / (lookGain || 1); }
+
+// 每一格:更新轉頭偏移(左右各最多 60 度);回傳轉身(自動轉)這一格要轉的角度
+function turnStep(dt, now) {
+  if (autoTurn) {   // 拍兩下的自動轉身:慢慢起步、慢慢停下,頭轉暫時沒有作用
+    autoTurn.t = Math.min(1, autoTurn.t + dt / AUTO_TURN_SEC);
+    var target = 90 * ease(autoTurn.t);
+    var d = target - autoTurn.done;
+    autoTurn.done = target;
+    var dir = autoTurn.dir;
+    if (autoTurn.t >= 1) { yawRef = lookYaw; autoTurn = null; holdSince = 0; turning = false; }
+    return dir * d;
+  }
+  var y = headYaw(), ay = Math.abs(y);
+  if (ay <= TURN_DEAD) { holdSince = 0; turning = false; return 0; }
+  if (!holdSince) holdSince = now;
+  if (!turning) {
+    if (now - holdSince < TURN_HOLD) return 0;   // 要停留 2 秒才開始轉
+    turning = true;
+    peakYaw = ay;
+  }
+  if (ay < peakYaw - 4) {   // 頭往回轉:停下來,以現在看的方向當中心(畫面不動)
+    turning = false;
+    holdSince = 0;
+    yawRef = lookYaw;
+    return 0;
+  }
+  peakYaw = Math.max(peakYaw, ay);
+  var step = Math.min(TURN_MAX, (ay - TURN_DEAD) * TURN_SPEED + 1) * dt;
+  viewOffset = Math.max(-TURN_RANGE, Math.min(TURN_RANGE, viewOffset + (y > 0 ? 1 : -1) * step));
+  return 0;
+}
+
+// 頭偏在一邊一陣子:旁邊出現小小的轉身圖示(拍兩下就轉)
+function turnHint(now) {
+  var h = $('turnHint');
+  var y = headYaw();
+  if (!vr || autoTurn || Math.abs(y) <= TURN_DEAD) { sideSince = 0; h.style.display = 'none'; return; }
+  if (!sideSince) sideSince = now;
+  if (now - sideSince < 800) return;
+  h.textContent = y > 0 ? '↻' : '↺';
+  h.style.left = y > 0 ? '' : '30vw';
+  h.style.right = y > 0 ? '30vw' : '';
+  h.style.display = 'flex';
+}
+
+// App:VR 重新置中了(正前方重設),轉身後記住的方向也要歸零
+window.vrRecentered = function () { yawRef = 0; autoTurn = null; holdSince = 0; turning = false; };
+
+// App:拍盒子兩下。頭偏一邊 = 往那邊轉 90 度;在街景正前方 = 往前走一步
+window.vrKnock = function () {
+  if (!place || !vr) return '';
+  var y = headYaw();
+  if (Math.abs(y) > TURN_DEAD && !autoTurn) {
+    autoTurn = { dir: y > 0 ? 1 : -1, t: 0, done: 0 };
+    $('turnHint').style.display = 'none';
+    return 'turn';
+  }
+  if (landed && !stepping) { walkAuto = false; step(1); return 'step'; }
+  return '';
+};
+
 function fly(now) {
   if (!place || menuShown()) { looping = false; return; }
   requestAnimationFrame(fly);
@@ -397,23 +487,39 @@ function fly(now) {
   last = now;
   if (landed) {
     // 地面(VR):轉頭控制街景看的方向;2D 時用手指拖動
-    if (pano && vr) pano.setPov({ heading: (panoBase + lookYaw + 360) % 360, pitch: Math.max(-80, Math.min(80, lookPitch)) });
+    if (pano && vr) {
+      // 頭在中間 20 度內轉動,畫面不動;超過才慢慢轉(每次轉頭最多 90 度),拍兩下 = 轉身 90 度
+      if (align) {   // 走之前慢慢對準方向
+        var at = Math.min(1, (now - align.t0) / align.dur);
+        panoBase = (align.from + align.delta * ease(at) + 360) % 360;
+        if (at >= 1) { var cb = align.cb; align = null; cb(); }
+      } else panoBase = (panoBase + turnStep(dt, now) + 360) % 360;   // 轉身時整個方向轉
+      turnHint(now);
+      svPitch += (Math.max(-60, Math.min(60, lookPitch)) - svPitch) * Math.min(1, dt * 6);   // 上下平滑
+      pano.setPov({ heading: (panoBase + viewOffset + 360) % 360, pitch: svPitch });
+      if (back && back.__want) back.setPov({ heading: (back.__base + viewOffset + 360) % 360, pitch: svPitch });
+    }
     // 自動散步:時間到就沿著路往前走一步(照身體正前方,不是照頭,轉頭看風景不會走歪)
     if (walkAuto && now - lastStep > walkSec * 1000) {
       lastStep = now;
       if (!step(1)) { walkAuto = false; refreshCtl(); }
     }
-    gazeStep(dt);
     return;
   }
   if (manual) return;   // 手勢控制中,不要蓋掉
-  if (!paused && progress < 1) progress = Math.min(1, progress + dt * speed / GLIDE_SEC);
+  altNow += (altScale - altNow) * Math.min(1, dt * 1.5);
+  if (waitSteady) {   // 地圖還在載入:先停在原地,等畫面成形再飛
+    if (mapSteady && now - steadyFrom > 600) waitSteady = false;
+    else if (now - steadyFrom > 10000) waitSteady = false;
+  }
+  if (!paused && !waitSteady && progress < 1) progress = Math.min(1, progress + dt * speed / GLIDE_SEC);
 
   var p = place;
   var bearing = (180 + leg * 90) * Math.PI / 180;               // 出發方向(從地標看出去):先從南邊接近
-  var dist = p.r * (START_FAR - (START_FAR - 1) * ease(progress));
+  // 飛高 = 離得更高更遠(畫面縮小、看得廣);飛低 = 更低更近(畫面放大),但不會低於地標頂端 60 公尺
+  var dist = p.r * (START_FAR - (START_FAR - 1) * ease(progress)) * Math.sqrt(altNow);
   var east = Math.sin(bearing) * dist, north = Math.cos(bearing) * dist;
-  var alt = p.top + (p.alt - p.top) * altScale;
+  var alt = p.top + Math.max(MIN_ABOVE, (p.alt - p.top) * altNow);
   var toCenter = (Math.atan2(-east, -north) * 180 / Math.PI + 360) % 360;   // 看向地標的方位(滑行中不變)
   var down = Math.atan2(alt - p.top, dist) * 180 / Math.PI;                 // 看向地標要低頭幾度
   if (vr) {
@@ -424,7 +530,9 @@ function fly(now) {
       altitude: alt
     };
     map.range = 1;
-    map.heading = (toCenter + lookYaw + 360) % 360;
+    flightHome = (flightHome + turnStep(dt, now) + 360) % 360;
+    turnHint(now);
+    map.heading = (toCenter + flightHome + viewOffset + 360) % 360;
     map.tilt = Math.max(0, Math.min(90, 90 - down + lookPitch));           // 90 = 看水平
   } else {
     // 2D:同樣的視角,但改成「繞著地標看」,手勢拖動、縮放時以地標為中心
@@ -489,24 +597,19 @@ function land() {
       panoBase = d > 0.0002 ? headingTo(loc.lat(), loc.lng(), at.lat, at.lng) : (leg * 90) % 360;
       fadeTo(function () {
         // 先顯示容器再建立街景,不然街景會量到 0 大小、一片空白
-        $('sv').style.display = 'block';
+        showSv(true);
         $('map').style.display = 'none';
+        if (!svService) svService = new sv.StreetViewService();
         if (!pano) {
-          pano = new sv.StreetViewPanorama($('sv'), {
-            disableDefaultUI: true, showRoadLabels: false,
-            clickToGo: true, linksControl: true,   // 2D 時可以點地上的箭頭往前走
-            motionTracking: false, motionTrackingControl: false
-          });
+          pano = makePano(sv, $('sv'));
+          back = makePano(sv, $('sv2'));   // 在後面先載入下一張,換景時不用等
+          layer();
         }
+        back.__want = '';
         pano.setPano(data.location.pano);
         landPano = data.location.pano;
+        viewOffset = 0; yawRef = lookYaw; autoTurn = null;
         // 街景的路(links)載入後,正前方沒有路就轉向最近的路
-        if (!pano.__faceRoad) {
-          pano.__faceRoad = true;
-          pano.addListener('links_changed', function () {
-            if (pendingFace) { pendingFace = false; faceRoad(); }
-          });
-        }
         pendingFace = true;
         walkAuto = false;
         pano.setPov({ heading: panoBase, pitch: 0 });
@@ -530,7 +633,7 @@ function land() {
 
 // 目前臉朝的方向(度):VR 用轉頭角度,2D 用街景目前的方向
 function viewHeading() {
-  if (vr) return (panoBase + lookYaw + 360) % 360;
+  if (vr) return (panoBase + viewOffset + 360) % 360;   // VR:畫面中間就是正在看的方向
   var pov = pano && pano.getPov ? pano.getPov() : null;
   return pov ? pov.heading : panoBase;
 }
@@ -550,32 +653,183 @@ function linkToward(heading, maxDiff) {
   return best && bestD <= maxDiff ? best : null;
 }
 
-// 換到下一張街景:短短淡出淡入,並把「正前方」轉成走的方向(坐著的人不用轉身)
-var stepping = false;
-function goLink(link) {
-  if (stepping) return;
-  stepping = true;
-  var f = $('fade');
-  f.style.transition = 'opacity 0.25s';
-  f.style.opacity = 1;
-  setTimeout(function () {
-    try {
-      pano.setPano(link.pano);
-      if (vr) panoBase = link.heading;
-      else pano.setPov({ heading: link.heading, pitch: 0 });
-    } catch (e) {}
-    f.style.opacity = 0;
-    setTimeout(function () { f.style.transition = ''; stepping = false; }, 300);
-  }, 260);
+// ---- 兩層街景:前面顯示目前這張,後面先把下一張載好 ----
+var back = null;   // 後面那層(預先載入下一張)
+
+function makePano(sv, div) {
+  var p = new sv.StreetViewPanorama(div, {
+    disableDefaultUI: true, showRoadLabels: false,
+    clickToGo: !vr, linksControl: !vr,   // 2D 時可以點地上的箭頭往前走;VR 時不顯示(按不到又擋畫面)
+    motionTracking: false, motionTrackingControl: false
+  });
+  p.__div = div;
+  p.__readyAt = 0;
+  // 換了一張:記下時間(狀態沒變時 status_changed 不會再觸發,所以兩個都聽)
+  function mark() { if (!p.getStatus || p.getStatus() === 'OK') p.__readyAt = performance.now(); }
+  p.addListener('pano_changed', mark);
+  p.addListener('status_changed', mark);
+  // 目前顯示的這層拿到路的資料:降落時轉向路、並預先載入前方下一張
+  p.addListener('links_changed', function () {
+    if (p !== pano) return;
+    if (pendingFace) { pendingFace = false; faceRoad(); }
+    preloadAhead();
+  });
+  return p;
 }
 
-// dir = 1 往前、-1 往後:沿著街景的路走一步;沒有路回傳 false
+// 前面那層在上、後面那層在下(兩層都要顯示,後面那層才會真的載入畫面)
+function layer() {
+  if (!pano || !back) return;
+  pano.__div.style.zIndex = 3;
+  back.__div.style.zIndex = 2;
+}
+
+function showSv(on) {
+  $('sv').style.display = on ? 'block' : 'none';
+  $('sv2').style.display = on ? 'block' : 'none';
+}
+
+// 在後面那層預先載入某條路的下一張(方向先對好)
+function preload(link, heading) {
+  if (!back || !link) return;
+  var h = heading === undefined ? link.heading : heading;
+  if (back.__want === link.pano) { back.__base = h; back.setPov({ heading: h, pitch: 0 }); return; }
+  back.__want = link.pano;
+  back.__base = h;
+  back.__readyAt = 0;
+  back.setPano(link.pano);
+  back.setPov({ heading: h, pitch: 0 });
+  back.setVisible(true);
+}
+
+// 街景點的位置與拍攝日期(查過就記住)
+var svService = null, metaCache = {};
+function meta(id) {
+  if (!id || !svService) return Promise.resolve(null);
+  if (metaCache[id]) return Promise.resolve(metaCache[id]);
+  return new Promise(function (ok) {
+    var done = false;
+    function finish(d) {
+      if (done) return;
+      done = true;
+      var m = d && d.location && d.location.latLng ?
+        { lat: d.location.latLng.lat(), lng: d.location.latLng.lng(), date: d.imageDate || '' } : null;
+      if (m) metaCache[id] = m;
+      ok(m);
+    }
+    setTimeout(function () { finish(null); }, 1500);
+    try {
+      var r = svService.getPanorama({ pano: id }, function (d, st) { finish(st === 'OK' ? d : null); });
+      if (r && r.then) r.then(function (res) { finish(res && res.data); }, function () { finish(null); });
+    } catch (e) { finish(null); }
+  });
+}
+
+function distM(a, b) {
+  var dN = (b.lat - a.lat) * M_PER_DEG;
+  var dE = (b.lng - a.lng) * M_PER_DEG * Math.cos(a.lat * Math.PI / 180);
+  return Math.sqrt(dN * dN + dE * dE);
+}
+
+// VR:慢慢把畫面轉到某個方向(走之前先對準真正要走的方向)
+var align = null;
+function alignTo(heading, ms, cb) {
+  if (!vr) {
+    var pov = pano.getPov();
+    pano.setPov({ heading: heading, pitch: pov ? pov.pitch : 0 });
+    cb();
+    return;
+  }
+  var from = (panoBase + viewOffset + 360) % 360;
+  var delta = ((heading - from) % 360 + 540) % 360 - 180;
+  panoBase = from;
+  viewOffset = 0;
+  if (Math.abs(delta) < 2) { panoBase = heading; cb(); return; }
+  align = { from: from, delta: delta, t0: performance.now(), dur: ms, cb: cb };
+}
+
+// 預先載入正前方(自動散步、前進會走的那條)
+function preloadAhead() {
+  if (!landed || stepping) return;
+  preload(linkToward(bodyHeading(), 100));
+}
+
+// 換到下一張:
+//  1. 查兩張的實際位置、日期,算出真正要走的方向與距離
+//  2. 先慢慢對準要走的方向(後面那層也用這個方向預先載好)
+//  3. 同一天拍、距離不遠:目前這張依距離放大(近 = 放大少、快;遠 = 放大多、慢),放大完直接換;
+//     不同天拍或太遠(超過 35 公尺):改用柔和淡入,不硬接
+var stepping = false;
+function goLink(link) {
+  if (stepping || !back) return;
+  stepping = true;
+  var curId = pano.getPano ? pano.getPano() : '';
+  var pos = pano.getPosition ? pano.getPosition() : null;
+  Promise.all([meta(curId), meta(link.pano)]).then(function (ms) {
+    var a = ms[0], b = ms[1];
+    var from = pos ? { lat: pos.lat(), lng: pos.lng() } : a;
+    var dist = from && b ? distM(from, b) : 10;
+    var bearing = from && b && dist > 1 ? headingTo(from.lat, from.lng, b.lat, b.lng) : link.heading;
+    var sameDate = !(a && b && a.date && b.date && a.date !== b.date);
+    preload(link, bearing);
+    alignTo(bearing, 500, function () { swapTo(link, bearing, dist, sameDate); });
+  });
+}
+
+function swapTo(link, bearing, dist, sameDate) {
+  var t0 = performance.now();
+  (function wait() {
+    var ready = back.__readyAt && performance.now() - back.__readyAt > 300;
+    if (!ready && performance.now() - t0 < 2500) { setTimeout(wait, 60); return; }
+    back.setPov({ heading: bearing, pitch: vr ? svPitch : 0 });
+    var front = pano.__div;
+    var soft = !sameDate || dist > 35;
+    var dur = soft ? 0.8 : Math.max(0.7, Math.min(2.0, 0.5 + dist * 0.05));
+    front.style.transformOrigin = '50% 50%';
+    if (soft) {
+      front.style.transition = 'opacity ' + dur + 's ease-in-out';
+      front.style.opacity = '0';
+    } else {
+      var k = Math.max(1.12, Math.min(2.2, 1 + dist / 22));
+      front.style.transition = 'transform ' + dur + 's ease-in';
+      front.style.transform = 'scale(' + k.toFixed(2) + ')';
+    }
+    setTimeout(function () {
+      var old = pano;
+      pano = back;
+      back = old;
+      back.__want = '';
+      layer();
+      if (vr) { panoBase = bearing; viewOffset = 0; }
+      front.style.transition = 'none';
+      front.style.transform = '';
+      front.style.opacity = '';
+      stepping = false;
+      preloadAhead();
+    }, dur * 1000 + 20);
+  })();
+}
+
+// dir = 1 往前、-1 往後:沿著街景的路走一步;沒有路回傳 false。
+// 前方有幾條差不多方向的路(30 度內),優先走和現在這張同一天拍的(光線、景物比較連貫)
 function step(dir) {
   if (!pano || !pano.getLinks || stepping) return !stepping ? false : true;
   var want = (bodyHeading() + (dir < 0 ? 180 : 0)) % 360;
-  var link = linkToward(want, 100);
-  if (!link) { flash(dir < 0 ? '後面沒有路了' : '前面沒有路了,可以按「迴轉」'); return false; }
-  goLink(link);
+  var cands = (pano.getLinks() || []).filter(function (l) { return angleDiff(l.heading, want) <= 100; })
+    .sort(function (x, y) { return angleDiff(x.heading, want) - angleDiff(y.heading, want); });
+  if (!cands.length) { flash(dir < 0 ? '後面沒有路了' : '前面沒有路了,可以按「迴轉」'); return false; }
+  var best = cands[0];
+  var near = cands.filter(function (l) { return angleDiff(l.heading, want) - angleDiff(best.heading, want) < 30; });
+  if (near.length < 2) { goLink(best); return true; }
+  var curId = pano.getPano ? pano.getPano() : '';
+  Promise.all([meta(curId)].concat(near.map(function (l) { return meta(l.pano); }))).then(function (ms) {
+    var cur = ms[0];
+    var pick = best;
+    if (cur && cur.date) for (var i = 0; i < near.length; i++) {
+      if (ms[i + 1] && ms[i + 1].date === cur.date) { pick = near[i]; break; }
+    }
+    goLink(pick);
+  });
   return true;
 }
 
@@ -586,26 +840,8 @@ function turnAround() {
   fadeTo(function () {
     if (vr) panoBase = (panoBase + 180) % 360;
     else { var pov = pano.getPov(); pano.setPov({ heading: (pov.heading + 180) % 360, pitch: 0 }); }
+    preloadAhead();
   });
-}
-
-// 凝視地面前進:稍微低頭看前方地面(低 15~45 度,還不會叫出面板),那個方向有路就出現箭頭,
-// 圓圈填滿(2.5 秒)就往那邊走一步;頭稍微偏左右可以選叉路
-var GAZE_SEC = 2.5, gazeT = 0, gazeLink = null;
-function gazeStep(dt) {
-  var g = $('gaze');
-  var link = null;
-  if (vr && !stepping && lookPitch < -15 && lookPitch > -45) link = linkToward(viewHeading(), 30);
-  if (!link || (gazeLink && link.pano !== gazeLink.pano)) gazeT = 0;
-  gazeLink = link;
-  if (!link) { g.style.display = 'none'; return; }
-  gazeT += dt;
-  // 箭頭指向路相對於臉的方向
-  var rel = ((link.heading - viewHeading()) % 360 + 540) % 360 - 180;
-  $('gazeArrow').style.transform = 'rotate(' + rel + 'deg)';
-  g.style.setProperty('--p', Math.min(100, gazeT / GAZE_SEC * 100) + '%');
-  g.style.display = 'flex';
-  if (gazeT >= GAZE_SEC) { gazeT = 0; walkAuto = false; goLink(link); g.style.display = 'none'; }
 }
 
 // 降落後如果正前方沒有路(例如路是左右向),自動轉到最近的一條路,坐著也能直接走
@@ -625,10 +861,10 @@ function roadName() {
 
 function takeOff() {
   walkAuto = false;
-  $('gaze').style.display = 'none';
+  viewOffset = 0;
   fadeTo(function () {
     landed = false;
-    $('sv').style.display = 'none';
+    showSv(false);
     $('map').style.display = 'block';
     flash(place ? place.name : '');
   });

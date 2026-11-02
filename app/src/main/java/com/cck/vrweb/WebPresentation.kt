@@ -15,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -80,6 +81,9 @@ class WebPresentation(
     var onAppCommand: (String) -> Unit = {}
     /** Google 地圖回報的錯誤代碼(例如 BillingNotEnabledMapError),每種只通知一次 */
     var onMapError: (String) -> Unit = {}
+    /** 網頁的繪製程序被系統關掉(多半是記憶體不足);參數 = 最後的網址 */
+    var onRendererGone: (String?) -> Unit = {}
+    private var lastUrl: String? = null
     private val mapErrorsSeen = HashSet<String>()
 
     // 內建頁面用 https://appassets.androidplatform.net/assets/… 提供(金鑰可限定只給這個網址用)
@@ -189,7 +193,14 @@ class WebPresentation(
                 assetLoader.shouldInterceptRequest(request.url)
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                lastUrl = url
                 onUrlChanged(url)
+            }
+
+            // 網頁用掉太多記憶體被系統關掉時,回傳 true 讓 App 不要跟著閃退,改由 App 重建網頁
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                onRendererGone(lastUrl)
+                return true
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -338,6 +349,11 @@ class WebPresentation(
                 "v.currentTime=v.duration*$fraction;return true;})()")
     }
 
+    /** 繼續播放(VR 置中倒數完) */
+    fun play() {
+        js("(function(){$FIND_VIDEO if(v&&v.paused)v.play();})()")
+    }
+
     /** 播放/暫停;找不到影片時點一下畫面中央 */
     fun togglePlay() {
         js("(function(){$FIND_VIDEO if(!v)return false;" +
@@ -357,6 +373,22 @@ class WebPresentation(
             "return p;})()") {
             cb(it?.trim('"')?.takeIf { s -> s != "null" } ?: "")
         }
+    }
+
+    /** 網頁上下捲動(VR 紅點碰到上下邊緣時) */
+    fun scrollBy(dy: Int) {
+        js("window.scrollBy(0,$dy)")
+    }
+
+    /**
+     * VR 中影片快播完時先停在最後(不讓網頁自己跳走或接著播下一部),由 App 顯示「播完」選單。
+     * on = false 時取消
+     */
+    fun endGuard(on: Boolean) {
+        js("(function(on){window.__vrGuard=on;if(!on)return;" +
+            "document.querySelectorAll('video').forEach(function(v){if(v.__vrG)return;v.__vrG=1;" +
+            "v.addEventListener('timeupdate',function(){if(!window.__vrGuard)return;" +
+            "if(isFinite(v.duration)&&v.duration>5&&!v.paused&&v.duration-v.currentTime<0.4)v.pause();});});})($on)")
     }
 
     /** 暫停網頁裡所有影片(回首頁時) */
