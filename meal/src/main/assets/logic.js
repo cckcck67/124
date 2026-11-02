@@ -2,6 +2,21 @@
  * 員工餐:核心邏輯(抽卡、搭配檢查、叫貨批次、用量計算、文字輸出)。
  * 沒有畫面相關的程式,App 和 Node 測試(tools/meal_test.js)共用。
  * 日期一律用 'YYYY-MM-DD' 字串(手機當地時間)。
+ *
+ * 存檔格式(state,整份存成手機裡的 meal.json):
+ *   version   1(格式有變時改 migrate(),只補欄位、不刪使用者的資料)
+ *   settings  people 估算人數、basePeople 料理用量是幾人份(30)、suppliers 供應商名稱、
+ *             vegSchedule 菜商叫貨排程、rules 排菜規則(mainCount 主菜道數、上限、不重複天數…)
+ *   items     品項:id、name 原始品名(叫貨單用)、std 標準名稱(畫面用)、cat 類別、unit 單位、
+ *             step 叫貨級距、supplier(veg / pork / chicken / stock 庫存品不叫貨)、keep 耐放度、green、unsure
+ *   dishes    料理卡:id、name、kind(pork / chicken / fish / veg / egg / nonrice)、status(常用 / 輪替 / 候選 / 停用)、
+ *             ings [{ i: 品項id, q: 30 人份用量 }]、main 主體食材、method 烹調方式、sauce 醬色、flavor 口味
+ *             (risks、note 是舊欄位,畫面已不顯示,保留不刪)
+ *   days      日期 → { type: 'rice' 飯菜日 | 'nonrice' 非飯菜日,
+ *                      dishes: [{ slot: main / veg / egg / nonrice, id 料理id, custom 自己輸入的菜名, locked }] }
+ *   orders    叫貨單 key → { supplier, orderDate, coverDates 涵蓋日期, status: draft 未叫 / sent 已叫 / arrived 已到,
+ *                            overrides 手動改的量, extra 手動加的品項, sentComputed / sentFinal 叫貨當下的估算 / 實際量, short 缺貨 }
+ *             菜商批次 key = 'veg|叫貨日',沒動過的不存,即時計算;肉商 key = 'pork|第一天' / 'chicken|第一天'
  */
 (function (root) {
 'use strict';

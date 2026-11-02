@@ -202,6 +202,13 @@ pre.fmt { white-space: pre-wrap; background: #f7f7f5; border-radius: 8px; paddin
 <script src="seed.js"></script>
 <script src="logic.js"></script>
 <script>
+/*
+ * 員工餐:畫面。邏輯在 logic.js(ML)、初始資料在 seed.js(SEED)。
+ * - 存檔:Android 的 Bridge(MainActivity.kt)load / save / loadPrev;在電腦瀏覽器打開時改用 localStorage
+ * - 底部五個分頁 = TABS.today / week / orders / pool / more;分頁裡的下一層畫面 = SUBS.xxx(ui.sub)
+ * - 點擊一律用 data-a="動作名稱" → 對應 A.動作名稱(el);底部彈出面板用 sheet() / ask()
+ * - 改到菜單後呼叫 afterMenuChange():存檔、重畫,影響到已叫貨的叫貨單會提醒
+ */
 'use strict';
 const host = window.Android;
 const KEY = 'meal-state';

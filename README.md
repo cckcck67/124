@@ -154,4 +154,4 @@ GitHub Actions 每次 push 都會自動編譯,並把 APK 與 version.json 發佈
 - 叫貨:菜商依排程自動彙總、豬肉 / 雞肉自選日期區間,複製或傳到 LINE;菜單改過會自動列出要追加或用不到的量
 - 卡池、品項都可以新增、修改、停用;料理可以批次新增(一行一道)
 
-完整說明、排菜規則、初始卡池:**[docs/meal.md](docs/meal.md)**
+完整說明、排菜規則、初始卡池:**[docs/meal.md](docs/meal.md)**;開發交接:[docs/meal-handoff.md](docs/meal-handoff.md)

@@ -17,6 +17,7 @@
   → 手機上的 App 自動檢查到新版,詢問是否更新
 - **Google 金鑰絕對不能放進 GitHub**:只存在手機的設定(prefs `mapsKey`)
 - `chat/` 資料夾是另一個 App(整人聊天),不是這個專案,不要動
+- `meal/` 資料夾是另一個 App(員工餐),交接見 [meal-handoff.md](meal-handoff.md)
 
 ## 3. 架構與檔案
 網頁 WebView → 私有虛擬螢幕(VirtualDisplay + Presentation,正方形 L×L)→ OpenGL 材質 → 2D 畫一份 / VR 左右各一份
