@@ -118,6 +118,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var glView: GLSurfaceView
     private lateinit var renderer: VrRenderer
     private lateinit var topBar: LinearLayout
+    private lateinit var barButton: Button      // 網址列收起時右上角的「≡」,按一下叫出網址列
+    private var barScrollY = 0f                 // 叫出網址列時網頁捲到哪裡(再往下捲才收起)
     private lateinit var urlInput: EditText
     private lateinit var gesture: GestureDetector
 
@@ -187,6 +189,7 @@ class MainActivity : Activity(), SensorEventListener {
         // 已移除的立體照功能留下的深度模型(約 27MB),刪掉釋放空間
         java.io.File(filesDir, "depth.onnx").delete()
         java.io.File(filesDir, "diag.txt").delete()   // 已移除的診斷紀錄
+        installCrashLog()
 
         quality = prefs.getInt("quality", 1).coerceIn(0, QUALITY_NAMES.size - 1)
         srcW = QUALITY_W[quality]
@@ -274,6 +277,15 @@ class MainActivity : Activity(), SensorEventListener {
             addView(starButton)
             addView(button("VR") { setVr(true) })
         }
+        barButton = Button(this).apply {
+            text = "≡"
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x99000000.toInt())
+            alpha = 0.6f
+            setPadding(0, 0, 0, 0)
+            setOnClickListener { showBar() }
+        }
         overlayHost = FrameLayout(this)
 
         // 網址列疊在畫面上,出現/隱藏時網頁大小不變
@@ -283,6 +295,9 @@ class MainActivity : Activity(), SensorEventListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(topBar, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+            addView(barButton, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(10); rightMargin = dp(10)
+            })
             addView(overlayHost, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
@@ -395,6 +410,8 @@ class MainActivity : Activity(), SensorEventListener {
                 dlg.show()
             })
             addView(settingRow("Google 金鑰申請、帳單與用量上限教學") { showKeyHelp() })
+            val crashes = if (crashFile.exists()) crashFile.readText().split("\n【").count { it.isNotBlank() } else 0
+            addView(settingRow("閃退紀錄:" + if (crashes == 0) "沒有" else "$crashes 筆") { showCrashLog() })
             addView(settingRow("檢查更新(目前版本 ${versionName()})") {
                 Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
             })
@@ -410,6 +427,61 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private var subScreen = false   // 設定 / 我的影片(從首頁打開)
+
+    // ---------------- 閃退紀錄 ----------------
+
+    private val crashFile get() = java.io.File(filesDir, "crash.txt")
+
+    /** App 閃退時把原因記在手機裡(只留最近幾筆),設定頁可以看,方便查原因 */
+    private fun installCrashLog() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                logEvent("閃退(${t.name})", sw.toString().take(4000))
+            } catch (ignored: Throwable) {}
+            prev?.uncaughtException(t, e)
+        }
+    }
+
+    /** 加一筆紀錄:時間、版本、當時狀態(哪個畫面、VR、直式 / 橫式、畫質) */
+    private fun logEvent(title: String, detail: String) {
+        try {
+            val time = java.text.SimpleDateFormat("MM/dd HH:mm:ss", java.util.Locale.TAIWAN).format(java.util.Date())
+            val portrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+            val state = "畫面=$screen VR=$vrMode ${if (portrait) "直式" else "橫式"} 畫質=${QUALITY_NAMES[quality]} " +
+                    "模式=${renderer.mode} 全螢幕=${presentation?.isFullscreen}"
+            val entry = "【$time 版本 ${versionName()}】$title\n$state\n$detail\n\n"
+            val old = if (crashFile.exists()) crashFile.readText() else ""
+            crashFile.writeText((entry + old).take(20000))
+        } catch (ignored: Throwable) {}
+    }
+
+    private fun showCrashLog() {
+        val text = if (crashFile.exists()) crashFile.readText() else ""
+        val tv = TextView(this).apply {
+            this.text = text.ifEmpty { "沒有紀錄" }
+            setTextIsSelectable(true)
+            textSize = 12f
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        val b = AlertDialog.Builder(this)
+            .setTitle("閃退紀錄")
+            .setView(ScrollView(this).apply { addView(tv) })
+            .setPositiveButton("關閉", null)
+        if (text.isNotEmpty()) {
+            b.setNeutralButton("複製") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("閃退紀錄", text))
+                toast("已複製,可以貼給開發者")
+            }
+            b.setNegativeButton("清除") { _, _ -> crashFile.delete(); showSettings() }
+        }
+        val dlg = b.create()
+        dlg.setOnDismissListener { hideSystemBars() }
+        dlg.show()
+    }
 
     /** 我的影片:從手機選影片加入清單,點一下播放、長按移除 */
     private fun showMyVideos() {
@@ -549,10 +621,8 @@ class MainActivity : Activity(), SensorEventListener {
         showOverlay(null)
         menu.buttons = VrMenu.VIDEO_BUTTONS
         applySettings()
-        if (isWebPage(cur) || cur == WEB_START) { barShown = true; updateTopBar() }
-        else openUrl(prefs.getString("url", null)?.takeIf { isWebPage(it) } ?: WEB_START)
-        barShown = true
-        updateTopBar()
+        if (!isWebPage(cur) && cur != WEB_START) openUrl(prefs.getString("url", null)?.takeIf { isWebPage(it) } ?: WEB_START)
+        showBar()
     }
 
     private fun goFlight() {
@@ -628,7 +698,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onConfigurationChanged(newConfig)
         if (pendingVr && newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
             pendingVr = false
-            handler.postDelayed({ setVr(true) }, 400)   // 等網頁換成橫式排版
+            handler.postDelayed({ if (!vrMode) setVr(true) }, 800)   // 等網頁換成橫式排版
         }
         if (vrMode) reverseLandscape = displayRotation() == Surface.ROTATION_270
         updatePageSize()
@@ -810,6 +880,7 @@ class MainActivity : Activity(), SensorEventListener {
         hideKeyboard()
         // 前往新網址後先收起網址列,在網頁最上面再往下拉才出現(起始頁不收)
         barShown = url == WEB_START
+        barScrollY = 0f
         updateTopBar()
     }
 
@@ -821,7 +892,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     /** 網址列:網頁瀏覽時依捲動顯示;空中遊覽、我的影片只留返回 / 首頁 / VR;首頁與 VR 時隱藏 */
     private fun updateTopBar() {
-        if (vrMode) { topBar.visibility = View.GONE; return }
+        if (vrMode) { topBar.visibility = View.GONE; barButton.visibility = View.GONE; return }
         val web = screen == SCREEN_WEB
         urlInput.visibility = if (web) View.VISIBLE else View.GONE
         starButton.visibility = if (web) View.VISIBLE else View.GONE
@@ -832,6 +903,14 @@ class MainActivity : Activity(), SensorEventListener {
             else -> true
         }
         topBar.visibility = if (show) View.VISIBLE else View.GONE
+        barButton.visibility = if (screen == SCREEN_WEB && !show) View.VISIBLE else View.GONE
+    }
+
+    /** 叫出網址列(右上角「≡」、往下拉);之後網頁再往下捲才收起 */
+    private fun showBar() {
+        barScrollY = lastScrollY
+        barShown = true
+        updateTopBar()
     }
 
     // ---------------- Google 金鑰(空中遊覽) ----------------
@@ -1105,6 +1184,7 @@ class MainActivity : Activity(), SensorEventListener {
         val now = SystemClock.uptimeMillis()
         val again = now - lastCrashAt < 60_000
         lastCrashAt = now
+        logEvent("網頁被系統關掉(記憶體不足)", "網址:" + (url ?: ""))
         if (vrMode) setVr(false)
         // 一分鐘內又被關掉:先停在空白頁,避免一直重開
         recreateWeb(if (again) "about:blank" else (url ?: "about:blank"), -1.0)
@@ -1148,7 +1228,8 @@ class MainActivity : Activity(), SensorEventListener {
                     // 網頁捲到最上面才顯示網址列
                     p.scrollTop { y ->
                         lastScrollY = y
-                        if (y > 4f && barShown) {   // 往下捲就收起網址列
+                        if (y < barScrollY) barScrollY = y
+                        if (barShown && y > 4f && y > barScrollY + 40f && !urlInput.hasFocus()) {   // 往下捲就收起網址列
                             barShown = false
                             updateTopBar()
                         }
@@ -1180,15 +1261,26 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------------- 模式切換 ----------------
 
     private var pendingVr = false
+    private var pausedForRotate = false   // 直式進 VR:轉橫式前暫停了影片
+    private var skipRotate = false
     @Volatile private var resumeAfterCenter = false   // 進 VR 時暫停的影片,置中倒數完再繼續
 
     private fun setVr(on: Boolean) {
-        // 直式全螢幕直接進 VR 會錯亂:先轉成橫式,轉好再進 VR(和橫式全螢幕進 VR 一樣)
-        if (on && !vrMode && screen == SCREEN_WEB && presentation?.isFullscreen == true &&
+        // 直式直接進 VR 會錯亂(手機轉向和網頁重新排版同時發生):
+        // 影片先暫停,先轉成橫式、等網頁排好,再進 VR(和橫式進 VR 一樣)
+        if (on && !vrMode && pendingVr && !skipRotate) return   // 正在轉橫式,再按一次 VR 不重複
+        if (on && !vrMode && !skipRotate &&
             resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) {
             pendingVr = true
+            pausedForRotate = false
+            if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) presentation?.videoStatus { st ->
+                if (st != null && !st.paused && pendingVr) { presentation?.pauseAll(); pausedForRotate = true }
+            }
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            handler.postDelayed({ if (pendingVr) { pendingVr = false; setVr(true) } }, 2000)
+            // 2.5 秒還沒轉好(系統不讓轉):不再等,直接進 VR
+            handler.postDelayed({
+                if (pendingVr) { pendingVr = false; skipRotate = true; setVr(true); skipRotate = false }
+            }, 2500)
             return
         }
         pendingVr = false
@@ -1227,8 +1319,10 @@ class MainActivity : Activity(), SensorEventListener {
         if (on) {
             // 影片正在播:先暫停,置中倒數完再繼續播(倒數時不會錯過內容)
             resumeAfterCenter = false
+            val wasPlaying = pausedForRotate   // 轉橫式時暫停的影片,置中後也要繼續
+            pausedForRotate = false
             if (screen == SCREEN_WEB || screen == SCREEN_VIDEO) presentation?.videoStatus { st ->
-                if (st != null && !st.paused && vrMode) { presentation?.pauseAll(); resumeAfterCenter = true }
+                if (st != null && (!st.paused || wasPlaying) && vrMode) { presentation?.pauseAll(); resumeAfterCenter = true }
             }
             autoDetectMode()
             startRecenterCountdown(ENTER_DELAY_MS)   // 倒數時把手機放進盒子、看正前方
@@ -1440,10 +1534,11 @@ class MainActivity : Activity(), SensorEventListener {
 
         // 網頁已在最上面時再往下拉 → 叫出網址列(不會一捲到頂就擋住網頁)
         if (action == MotionEvent.ACTION_DOWN) downScrollY = lastScrollY
-        if (action == MotionEvent.ACTION_MOVE && !barShown && downScrollY <= 4f && lastScrollY <= 4f &&
-            ev.y - downY > PULL_SHOW_PX) {
-            barShown = true
-            updateTopBar()
+        // 影片全螢幕時:從螢幕上半部往下拉就叫出來(下面的網頁不一定在最上面)
+        val full = presentation?.isFullscreen == true
+        if (action == MotionEvent.ACTION_MOVE && !barShown && ev.y - downY > PULL_SHOW_PX &&
+            ((downScrollY <= 4f && lastScrollY <= 4f) || (full && downY < glView.height / 2f))) {
+            showBar()
         }
 
         // 點一下(不是滑動)網頁文字框 → 跳出輸入視窗,用手機鍵盤打字
@@ -1609,6 +1704,12 @@ class MainActivity : Activity(), SensorEventListener {
             smoothCursor(ex, ey)
             updateMenu(SystemClock.uptimeMillis())
             redraw()
+            return@Runnable
+        }
+
+        // ---- VR 網頁(紅點操作):不叫出面板,抬頭 / 低頭只用來捲動網頁 ----
+        if (webCursor && !menuOpen) {
+            updateWebCursor(az, down)
             return@Runnable
         }
 
