@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 對話框底:深藍漸層 + 發光藍框 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="16dp" android:insetRight="16dp" android:insetTop="16dp" android:insetBottom="16dp">
+    <layer-list>
+        <item>
+            <shape android:shape="rectangle">
+                <corners android:radius="6dp" />
+                <stroke android:width="6dp" android:color="#402FA8FF" />
+            </shape>
+        </item>
+        <item android:left="2dp" android:top="2dp" android:right="2dp" android:bottom="2dp">
+            <shape android:shape="rectangle">
+                <corners android:radius="4dp" />
+                <gradient android:angle="270" android:startColor="#FF0B2A52" android:endColor="#FF04122A" />
+                <stroke android:width="2dp" android:color="#FF2FA8FF" />
+            </shape>
+        </item>
+    </layer-list>
+</inset>

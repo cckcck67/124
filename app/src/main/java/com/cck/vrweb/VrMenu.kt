@@ -73,7 +73,7 @@ class VrMenu {
         const val BTN_WEB = 24           // 影片:停止播放,進入 VR 網頁操作(紅點)
         private val LABELS = arrayOf("坐姿", "音量－", "音量＋", "快進10秒", "模式", "置中", "設定",
             "暫停", "重飛", "換角度", "降落", "飛快－", "飛快＋", "飛低", "飛高",
-            "前進", "迴轉", "自動散步", "走快－", "走快＋", "回降落點",
+            "前進", "迴轉", "自動走", "走快－", "走快＋", "回降落點",
             "", "", "", "網頁")
 
         /** 影片(網頁、我的影片)用的按鈕 */
@@ -386,7 +386,7 @@ class VrMenu {
                 BTN_MODE -> MODE_NAMES[mode]
                 BTN_FLY_PAUSE -> if (flyPaused) "繼續" else "暫停"
                 BTN_FLY_LAND -> if (flyLanded) "起飛" else "降落"
-                BTN_WALK_AUTO -> if (walking) "停止" else "自動散步"
+                BTN_WALK_AUTO -> if (walking) "停止" else "自動走"
                 else -> LABELS[id]
             }
             drawButton(c, ROW_L + i * bw + 6, btnTop + 8, ROW_L + (i + 1) * bw - 6, btnBottom - 8,

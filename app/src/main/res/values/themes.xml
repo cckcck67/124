@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App 本身維持原來的全螢幕黑底主題,只把對話框換成科幻風格(深藍底、發光藍框) -->
+    <style name="AppTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:alertDialogTheme">@style/HudDialog</item>
+    </style>
+
+    <style name="HudDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/hud_dialog_bg</item>
+        <item name="android:colorBackground">#FF071A33</item>
+        <item name="android:textColorPrimary">#FFEEFAFF</item>
+        <item name="android:textColorSecondary">#FF6FB2E6</item>
+        <item name="android:textColorAlertDialogListItem">#FFEEFAFF</item>
+        <item name="android:textColorHint">#FF4F8FC6</item>
+        <item name="android:colorAccent">#FF7FECFF</item>
+        <item name="android:colorControlNormal">#FF2FA8FF</item>
+        <item name="android:colorControlActivated">#FF7FECFF</item>
+        <item name="android:listDivider">@drawable/hud_divider</item>
+    </style>
+</resources>

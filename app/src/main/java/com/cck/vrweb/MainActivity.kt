@@ -321,26 +321,30 @@ class MainActivity : Activity(), SensorEventListener {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(18), dp(12), dp(18), dp(4))
             if (back) addView(iconButton("back", "返回") { goHome() })
+            // 標題欄佔剩下的寬度(直式手機也不會把右邊按鈕擠出畫面)
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(12), 0, dp(16), 0)
+                setPadding(dp(12), 0, dp(10), 0)
                 addView(TextView(context).apply {
                     text = title
+                    setSingleLine()
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                     setTextColor(0xFFD6F2FF.toInt())
-                    textSize = if (back) 24f else 32f
-                    letterSpacing = if (back) 0.1f else 0.2f
+                    textSize = if (back) 22f else 30f
+                    letterSpacing = if (back) 0.05f else 0.15f
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
                     setShadowLayer(dp(10).toFloat(), 0f, 0f, Hud.LINE)
                 })
                 if (sub != null) addView(TextView(context).apply {
                     text = sub
+                    setSingleLine()
                     setTextColor(Hud.TAG)
-                    textSize = 11f
-                    letterSpacing = 0.3f
+                    textSize = 10f
+                    letterSpacing = 0.2f
                     typeface = android.graphics.Typeface.MONOSPACE
                 })
-            })
-            addView(HudLineView(context), LinearLayout.LayoutParams(0, dp(14), 1f).apply { rightMargin = dp(16) })
+                addView(HudLineView(context), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(12)))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             if (right != null) addView(right)
         }
 
@@ -514,7 +518,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     /** 我的影片:從手機選影片加入清單,點一下播放、長按移除 */
     private fun showMyVideos() {
-        val items = loadMyVideos()
+        val items = removeMissingVideos()
         val listView = ListView(this).apply {
             adapter = object : ArrayAdapter<String>(context, android.R.layout.simple_list_item_1,
                 items.map { it.second }) {
@@ -554,9 +558,9 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         showOverlay(hudPage().apply {
-            addView(header("我的影片", true, iconButton("plus", "加入影片") { pickVideos() }))
+            addView(header("我的影片", true, iconButton("plus", "加入") { pickVideos() }))
             if (items.isEmpty()) addView(TextView(context).apply {
-                text = "還沒有影片\n按右上角「＋ 加入影片」從手機選擇\n(左右3D、VR180、360 影片進 VR 會自動判斷格式)"
+                text = "還沒有影片\n按右上角「＋ 加入」從手機選擇\n(左右3D、VR180、360 影片進 VR 會自動判斷格式)"
                 setTextColor(Hud.SUB)
                 textSize = 18f
                 gravity = Gravity.CENTER
@@ -572,6 +576,32 @@ class MainActivity : Activity(), SensorEventListener {
         val a = org.json.JSONArray(prefs.getString("myVideos", "[]"))
         (0 until a.length()).map { a.getJSONObject(it).let { o -> o.optString("u") to o.optString("n") } }
     } catch (e: Exception) { emptyList() }
+
+    /**
+     * 清單只記錄影片在手機裡的位置(不複製檔案)。打開「我的影片」時逐一檢查:
+     * 影片被搬走、刪除(打不開)就從清單移除,並告訴使用者移除了幾個。
+     */
+    private fun removeMissingVideos(): List<Pair<String, String>> {
+        val all = loadMyVideos()
+        val ok = all.filter { (u, _) ->
+            try {
+                val fd = contentResolver.openFileDescriptor(Uri.parse(u), "r")
+                fd?.close()
+                fd != null
+            } catch (e: java.io.FileNotFoundException) { false
+            } catch (e: SecurityException) { false
+            } catch (e: IllegalArgumentException) { false
+            } catch (e: Exception) { true }   // 其他錯誤(暫時讀不到)先保留
+        }
+        if (ok.size != all.size) {
+            for ((u, _) in all - ok.toSet()) try {
+                contentResolver.releasePersistableUriPermission(Uri.parse(u), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            saveMyVideos(ok)
+            toast("有 ${all.size - ok.size} 部影片已被移動或刪除,已從清單移除")
+        }
+        return ok
+    }
 
     private fun saveMyVideos(list: List<Pair<String, String>>) {
         val a = org.json.JSONArray()
@@ -2260,7 +2290,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if (!menu.buttons.contentEquals(want)) { menu.buttons = want; menu.hover = VrMenu.NONE }
                 menu.infoText = if (o == null) "空中遊覽:請先在 2D 畫面選擇目的地" else if (menu.flyLanded)
                     "街景  " + o.optString("road").ifEmpty { o.optString("name") } +
-                        (if (menu.walking) "  自動散步中" else "") + "  每 ${o.optInt("walkSec", 4)} 秒一步"
+                        (if (menu.walking) "  自動走中" else "") + "  每 ${o.optInt("walkSec", 4)} 秒一步"
                 else
                     "空中遊覽  " + o.optString("name") + when {
                         menu.flyLanded -> "  已降落(街景)"
