@@ -17,8 +17,9 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class StartupTest {
 
-    private fun findButton(v: View, text: String): Button? {
-        if (v is Button && v.text == text) return v
+    /** 依文字或說明(圖示按鈕、首頁卡片)找可以按的元件 */
+    private fun findButton(v: View, text: String): View? {
+        if (((v is Button && v.text == text) || (v.isClickable && v.contentDescription == text))) return v
         if (v is ViewGroup) for (i in 0 until v.childCount) findButton(v.getChildAt(i), text)?.let { return it }
         return null
     }
@@ -38,7 +39,7 @@ class StartupTest {
         a.onBackPressed()                                  // → 首頁
         findButton(root, "我的影片")!!.performClick()       // 我的影片清單
         a.onBackPressed()
-        findButton(root, "⚙ 設定")!!.performClick()        // 設定頁
+        findButton(root, "設定")!!.performClick()        // 設定頁
         a.onBackPressed()
         c.pause().resume()                                 // 切到背景再回來
         c.pause().stop().destroy()

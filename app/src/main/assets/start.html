@@ -5,14 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>網頁瀏覽</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; color: #fff; font-family: sans-serif; }
-  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; text-align: center; }
-  h1 { margin: 0; font-size: 9vmin; }
-  p { margin: 0; color: #aaa; font-size: 4vmin; }
+  html, body { margin: 0; height: 100%; color: #eefaff; font-family: sans-serif; }
+  /* 科幻風格:深藍漸層 + 格線(和 App 首頁一致) */
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; text-align: center;
+    background: linear-gradient(#2a6fb026 1px, transparent 1px) 0 0 / 32px 32px,
+                linear-gradient(90deg, #2a6fb026 1px, transparent 1px) 0 0 / 32px 32px,
+                radial-gradient(ellipse at 50% 45%, #0d2c5a 0%, #061027 55%, #01040b 100%); }
+  h1 { margin: 0; font-size: 9vmin; letter-spacing: .1em; color: #d6f2ff; text-shadow: 0 0 12px #2fa8ff, 0 0 24px #2fa8ff; }
+  p { margin: 0; color: #6fb2e6; font-size: 4vmin; }
 </style>
 </head>
 <body>
   <h1>網頁瀏覽</h1>
-  <p>在上方網址列輸入網址或關鍵字<br>「yt 關鍵字」= 搜尋 YouTube;★ = 書籤</p>
+  <p>在上方網址列輸入網址或關鍵字<br>「yt 關鍵字」= 搜尋 YouTube;☆ = 書籤</p>
 </body>
 </html>

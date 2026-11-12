@@ -2,8 +2,10 @@ package com.cck.vrweb
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 
 /**
  * 控制面板。坐姿:低頭叫出,放在畫面下方;躺平:抬頭叫出,放在畫面上方。
@@ -89,8 +91,8 @@ class VrMenu {
             BTN_WALK_SLOWER, BTN_WALK_FASTER, BTN_WALK_HOME, BTN_FLY_LAND, BTN_RECENTER, BTN_SETTINGS)
 
         // 順序對應 VrRenderer.MODE_*
-        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧", "2D曲面")
-        // 「模式」選單裡的排列順序(2D曲面排在 2D 後面)
+        val MODE_NAMES = arrayOf("2D", "左右3D", "VR180", "上下VR", "環顧", "電影院")
+        // 「模式」選單裡的排列順序(電影院排在 2D 後面)
         val MODE_ORDER = intArrayOf(0, 5, 1, 2, 3, 4)
 
         // 設定頁:兩欄(項目多時三欄),每格 = 名稱與數值、−、+
@@ -134,17 +136,8 @@ class VrMenu {
     var endPage = false        // 影片播完的選單(重播 / 回到網頁 / 離開 VR)
     var settingRows: List<Pair<String, String>> = emptyList()   // 設定頁每項的 (名稱, 數值)
 
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC101010.toInt() }
+    private val hp = HudPainter()
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val centerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFFFFFFF.toInt(); textSize = 40f; textAlign = Paint.Align.CENTER
-    }
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 7f; color = 0xFFFFD040.toInt()
-    }
-    private val selPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 5f; color = 0xFF60D060.toInt()
-    }
     private val rect = RectF()
 
     private fun canSeek() = hasVideo && duration > 0
@@ -210,75 +203,127 @@ class VrMenu {
         return ((px - BAR_L) / (BAR_R - BAR_L)).coerceIn(0f, 1f)
     }
 
-    private fun drawButton(
-        c: Canvas, l: Float, t: Float, r: Float, b: Float, hot: Boolean, dw: Float, label: String
-    ) {
-        rect.set(l, t, r, b)
-        fillPaint.color = if (hot) 0xFF2F5A88.toInt() else 0xFF2A2A2A.toInt()
-        c.drawRoundRect(rect, 18f, 18f, fillPaint)
-        if (dw > 0f) {
-            fillPaint.color = 0xFF5B9BE0.toInt()
-            rect.set(l, t, l + (r - l) * dw, b)
-            c.drawRoundRect(rect, 18f, 18f, fillPaint)
-        }
-        // 字太長就縮小,放得進按鈕
-        val size = centerText.textSize
-        val maxW = (r - l) - 16
-        val tw = centerText.measureText(label)
-        if (tw > maxW) centerText.textSize = size * maxW / tw
-        c.drawText(label, (l + r) / 2, (t + b) / 2 + 14, centerText)
-        centerText.textSize = size
+    /** 按鈕上的圖示名稱(Hud.iconPath) */
+    private fun iconFor(id: Int): String? = when (id) {
+        BTN_POSTURE -> "posture"
+        BTN_VOL_DOWN -> "volDown"
+        BTN_VOL_UP -> "volUp"
+        BTN_FWD -> "ff"
+        BTN_MODE -> modeIcon(mode)
+        BTN_RECENTER -> "target"
+        BTN_SETTINGS -> "wrench"
+        BTN_FLY_PAUSE -> if (flyPaused) "play" else "pause"
+        BTN_FLY_RESTART -> "replay"
+        BTN_FLY_NEXT -> "turn"
+        BTN_FLY_LAND -> if (flyLanded) "takeoff" else "land"
+        BTN_FLY_SLOWER, BTN_WALK_SLOWER -> "slower"
+        BTN_FLY_FASTER, BTN_WALK_FASTER -> "faster"
+        BTN_FLY_LOWER -> "lower"
+        BTN_FLY_HIGHER -> "higher"
+        BTN_WALK_FWD -> "up"
+        BTN_WALK_BACK -> "uturn"
+        BTN_WALK_AUTO -> if (walking) "stop" else "walk"
+        BTN_WALK_HOME -> "pin"
+        BTN_WEB -> "globe"
+        else -> null
     }
 
-    /** 影片播完:重播 / 回到網頁 / 離開 VR(大圖示,底下一行小字) */
+    private fun modeIcon(m: Int) = when (m) {
+        VrRenderer.MODE_CURVE -> "cinema"
+        1 -> "m3d"
+        2 -> "m180"
+        3 -> "mtb"
+        4 -> "m360"
+        else -> "m2d"
+    }
+
+    /**
+     * 科幻風格按鈕:斜切角發光框;有圖示時圖示在上、字在下。
+     * 注視停留時,按鈕底部的亮條由左往右填滿(dw = 0~1)。
+     */
+    private fun drawButton(
+        c: Canvas, l: Float, t: Float, r: Float, b: Float, hot: Boolean, dw: Float, label: String,
+        icon: String? = null, faded: Boolean = false, textSize: Float = 34f
+    ) {
+        val h = b - t
+        val cut = minOf(16f, h * 0.18f)
+        hp.panel(c, l, t, r, b, cut, 2.5f, hot = hot, faded = faded)
+        if (dw > 0f) {
+            c.save()
+            c.clipPath(hp.framePath(l, t, r, b, cut, false))
+            val x = l + (r - l) * dw.coerceIn(0f, 1f)
+            rect.set(l, t, x, b)
+            fillPaint.color = 0x335FD8FF
+            c.drawRect(rect, fillPaint)
+            fillPaint.color = Hud.withAlpha(Hud.BRIGHT, 0x60)
+            c.drawRect(l, b - 18f, x, b, fillPaint)
+            fillPaint.color = Hud.BRIGHT
+            c.drawRect(l, b - 11f, x, b, fillPaint)
+            c.restore()
+        }
+        val maxW = (r - l) - 16
+        val color = if (faded) Hud.DIM else Hud.TEXT
+        if (icon != null && h >= 100f) {
+            val size = minOf(h * 0.4f, (r - l) * 0.55f)
+            hp.icon(c, icon, (l + r) / 2, t + h * 0.36f, size, if (faded) Hud.DIM else Hud.ICON, weight = 4.5f)
+            hp.glowText(c, label, (l + r) / 2, b - h * 0.14f, textSize, color, maxW, if (faded) 0 else Hud.LINE)
+        } else {
+            hp.glowText(c, label, (l + r) / 2, (t + b) / 2 + textSize * 0.36f, textSize, color, maxW,
+                if (faded) 0 else Hud.LINE)
+        }
+    }
+
+    /** 面板最外側空白列的英文小標(不能點,只是裝飾) */
+    private fun drawTag(c: Canvas, s: String) {
+        val (t, bt) = band(0f, START_END)
+        val y = (t + bt) / 2 + 9f
+        hp.tag(c, s, W - 56f, y, 24f)
+        hp.tag(c, "◆ WebVR", 56f, y, 24f, Paint.Align.LEFT)
+    }
+
+    /** 影片播完:重播 / 回到網頁 / 離開 VR(大圖示,底下一行字) */
     private fun drawEnd(c: Canvas) {
-        val icons = arrayOf("🔁", "🌐", "🚪")
+        val icons = arrayOf("replay", "globe", "exit")
         val names = arrayOf("重播", "回到網頁", "離開VR")
         val ids = intArrayOf(BTN_END_REPLAY, BTN_END_WEB, BTN_END_EXIT)
         val w = (ROW_R - ROW_L) / 3f
         for (i in 0..2) {
-            val l = ROW_L + i * w + 10
-            val r = ROW_L + (i + 1) * w - 10
+            val l = ROW_L + i * w + 14
+            val r = ROW_L + (i + 1) * w - 14
             val hot = hover == ids[i]
-            drawButton(c, l, 20f, r, H - 20f, hot, if (hot) dwell else 0f, "")
+            drawButton(c, l, 30f, r, H - 30f, hot, if (hot) dwell else 0f, "")
             val cx = (l + r) / 2
-            val size = centerText.textSize
-            centerText.textSize = 150f
-            c.drawText(icons[i], cx, H / 2f + 30f, centerText)
-            centerText.textSize = 40f
-            c.drawText(names[i], cx, H - 50f, centerText)
-            centerText.textSize = size
+            hp.ring(c, cx, H / 2f - 40f, 105f, 3f)
+            hp.icon(c, icons[i], cx, H / 2f - 40f, 120f, weight = 4f)
+            hp.glowText(c, names[i], cx, H - 62f, 44f, maxW = r - l - 20)
         }
     }
 
     private fun drawSettings(c: Canvas) {
+        drawTag(c, "CONTROL // SETTINGS")
         val w = cellW()
         for (i in 0 until cellCount()) {
-            val l = cellLeft(i) + 6
-            val (t, bt) = band(cellTop(i) + 4, cellTop(i) + SET_ROW_H - 4)
+            val l = cellLeft(i) + 8
+            val (t, bt) = band(cellTop(i) + 6, cellTop(i) + SET_ROW_H - 6)
             val (name, value) = settingRows[i]
-            rect.set(l, t, l + w * 0.57f, bt)
-            fillPaint.color = 0xFF202020.toInt()
-            c.drawRoundRect(rect, 14f, 14f, fillPaint)
+            hp.panel(c, l, t, l + w * 0.56f, bt, 12f, 2f)
             // 名稱和數值分兩行,三欄時也放得下
-            centerText.textSize = 28f
             val mid = (t + bt) / 2
-            c.drawText(name, l + w * 0.285f, mid - 6, centerText)
-            centerText.color = 0xFFFFD040.toInt()
-            c.drawText(value, l + w * 0.285f, mid + 28, centerText)
-            centerText.color = 0xFFFFFFFF.toInt()
-            centerText.textSize = 44f
+            val tw = w * 0.56f - 16
+            hp.glowText(c, name, l + w * 0.28f, mid - 6, 28f, Hud.TEXT, tw, 0)
+            hp.glowText(c, value, l + w * 0.28f, mid + 28, 28f, Hud.BRIGHT, tw, 0)
             val minus = SET_MINUS + 2 * i
-            drawButton(c, l + w * 0.59f, t, l + w * 0.78f, bt, hover == minus, if (hover == minus) dwell else 0f, "−")
-            drawButton(c, l + w * 0.80f, t, l + w - 12, bt, hover == minus + 1, if (hover == minus + 1) dwell else 0f, "+")
+            drawButton(c, l + w * 0.59f, t, l + w * 0.78f, bt, hover == minus, if (hover == minus) dwell else 0f,
+                "−", textSize = 46f)
+            drawButton(c, l + w * 0.80f, t, l + w - 14, bt, hover == minus + 1, if (hover == minus + 1) dwell else 0f,
+                "+", textSize = 46f)
         }
     }
 
     fun draw(b: Bitmap) {
         b.eraseColor(0)
         val c = Canvas(b)
-        rect.set(0f, 0f, W.toFloat(), H.toFloat())
-        c.drawRoundRect(rect, 28f, 28f, bgPaint)
+        hp.panel(c, 10f, 10f, W - 10f, H - 10f, 34f, 3f, notch = true, alpha = 0xE0)
         if (endPage) {
             drawEnd(c)
             return
@@ -287,49 +332,52 @@ class VrMenu {
             drawSettings(c)
             return
         }
+        drawTag(c, when {
+            buttons === FLIGHT_BUTTONS -> "CONTROL // FLIGHT"
+            buttons === WALK_BUTTONS -> "CONTROL // WALK"
+            else -> "CONTROL // VIDEO"
+        })
 
         // ---- 進度條,或拉出的選項列 ----
         val (barTop, barBottom) = band(START_END, BAR_END)
         val barY = (barTop + barBottom) / 2 + 4
-        centerText.textSize = 38f
         if (popup != NONE) {
             val names = optionNames()
             val w = (ROW_R - ROW_L) / names.size
             for (i in names.indices) {
-                val l = ROW_L + i * w + 6
-                val r = ROW_L + (i + 1) * w - 6
+                val l = ROW_L + i * w + 8
+                val r = ROW_L + (i + 1) * w - 8
                 val hot = hover == OPTION + i
-                drawButton(c, l, barTop + 8, r, barBottom - 6, hot, if (hot) dwell else 0f, names[i])
-                if (i == selectedOption()) {
-                    rect.set(l, barTop + 8, r, barBottom - 6)
-                    c.drawRoundRect(rect, 18f, 18f, selPaint)
-                }
+                drawButton(c, l, barTop + 8, r, barBottom - 6, hot, if (hot) dwell else 0f, names[i],
+                    modeIcon(MODE_ORDER[i]), textSize = 30f)
+                if (i == selectedOption()) hp.glow(c, hp.framePath(l, barTop + 8, r, barBottom - 6, 14f, false), Hud.GREEN, 3f)
             }
         } else if (canSeek()) {
-            fillPaint.color = 0x66FFFFFF
-            rect.set(BAR_L, barY - 9, BAR_R, barY + 9)
-            c.drawRoundRect(rect, 9f, 9f, fillPaint)
+            hp.fillPath(c, hp.slant(BAR_L, barY - 8, BAR_R, barY + 8, 8f), 0xFF12314F.toInt())
             val played = BAR_L + (BAR_R - BAR_L) * (current / duration).toFloat().coerceIn(0f, 1f)
-            fillPaint.color = 0xFFFF3030.toInt()
-            rect.set(BAR_L, barY - 9, played, barY + 9)
-            c.drawRoundRect(rect, 9f, 9f, fillPaint)
-            fillPaint.color = 0xFFFFFFFF.toInt()
-            c.drawCircle(played, barY, 14f, fillPaint)
+            if (played > BAR_L + 10) {
+                hp.fillPath(c, hp.slant(BAR_L - 4, barY - 14, played + 4, barY + 14, 10f), Hud.withAlpha(0x4CC8FF, 0x40))
+                hp.fillPath(c, hp.slant(BAR_L, barY - 8, played, barY + 8, 8f), 0,
+                    LinearGradient(BAR_L, 0f, played, 0f, 0xFF1D6CFF.toInt(), 0xFF6FE4FF.toInt(), Shader.TileMode.CLAMP))
+            }
+            // 目前位置:瞄準器樣式的圓點
+            hp.circle(c, played, barY, 26f, Hud.withAlpha(Hud.BRIGHT, 0x30), true)
+            for (a in floatArrayOf(-70f, 20f, 110f, 200f)) hp.arc(c, played, barY, 22f, a, 50f, Hud.BRIGHT, 4f)
+            hp.circle(c, played, barY, 11f, 0xFFDFF8FF.toInt(), true)
+            hp.tag(c, fmt(0.0), BAR_L, barY + 40, 24f, Paint.Align.LEFT)
+            hp.tag(c, fmt(duration), BAR_R, barY + 40, 24f, Paint.Align.RIGHT)
 
             if (hover == BAR) {
                 val x = BAR_L + (BAR_R - BAR_L) * hoverFrac
-                fillPaint.color = 0xFFFFD040.toInt()
-                c.drawRect(x - 3, barY - 24, x + 3, barY + 24, fillPaint)
-                rect.set(x - 28, barY - 28, x + 28, barY + 28)
-                c.drawArc(rect, -90f, 360f * dwell, false, ringPaint)
-                centerText.textSize = 30f
-                c.drawText(fmt(hoverFrac * duration), x.coerceIn(60f, W - 60f), barY - 36, centerText)
+                hp.line(c, x, barY - 26, x, barY + 26, Hud.withAlpha(Hud.BRIGHT, 0x60), 12f)
+                hp.line(c, x, barY - 26, x, barY + 26, Hud.BRIGHT, 5f)
+                hp.arc(c, x, barY, 30f, -90f, 360f * dwell, Hud.BRIGHT, 7f)
+                hp.glowText(c, fmt(hoverFrac * duration), x.coerceIn(60f, W - 60f), barY - 38, 30f)
             }
         }
 
         // ---- 按鈕 ----
         val (btnTop, btnBottom) = band(BAR_END, BTN_END)
-        centerText.textSize = 34f
         val bw = (ROW_R - ROW_L) / buttons.size
         for (i in buttons.indices) {
             val id = buttons[i]
@@ -341,22 +389,25 @@ class VrMenu {
                 BTN_WALK_AUTO -> if (walking) "停止" else "自動散步"
                 else -> LABELS[id]
             }
-            centerText.color = if (popup != NONE && popup != id) 0xFF777777.toInt() else 0xFFFFFFFF.toInt()
-            drawButton(c, ROW_L + i * bw + 6, btnTop + 6, ROW_L + (i + 1) * bw - 6, btnBottom - 6,
-                hover == id || popup == id, if (hover == id) dwell else 0f, label)
+            drawButton(c, ROW_L + i * bw + 6, btnTop + 8, ROW_L + (i + 1) * bw - 6, btnBottom - 8,
+                hover == id || popup == id, if (hover == id) dwell else 0f, label, iconFor(id),
+                faded = popup != NONE && popup != id, textSize = 32f)
         }
-        centerText.color = 0xFFFFFFFF.toInt()
 
         // ---- 資訊列(不能點) ----
         val (infoTop, infoBottom) = band(BTN_END, H.toFloat())
-        centerText.textSize = 34f
-        centerText.color = 0xFFBBBBBB.toInt()
         val info = infoText ?: run {
             val time = if (canSeek()) "${fmt(current)} / ${fmt(duration)}" else "找不到可控制的影片"
             val state = if (hasVideo && paused) "    已暫停" else ""
             "$time$state    音量 $volume    ${MODE_NAMES[mode]}"
         }
-        c.drawText(info, W / 2f, (infoTop + infoBottom) / 2 + 12, centerText)
-        centerText.color = 0xFFFFFFFF.toInt()
+        val my = (infoTop + infoBottom) / 2
+        hp.text.textSize = 30f
+        val tw = minOf(hp.text.measureText(info), W - 200f)
+        val bx0 = W / 2f - tw / 2 - 40; val bx1 = W / 2f + tw / 2 + 40
+        val box = hp.slant(bx0, my - 26, bx1, my + 26, 14f)
+        hp.fillPath(c, box, 0xCC06182F.toInt())
+        hp.glow(c, box, 0xFF2A6FB0.toInt(), 2f)
+        hp.glowText(c, info, W / 2f, my + 11, 30f, 0xFFCFEAFF.toInt(), W - 200f, 0)
     }
 }

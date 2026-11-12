@@ -242,16 +242,13 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var overlayHost: FrameLayout      // 首頁 / 設定 / 我的影片(蓋在網頁上方)
 
     private fun buildUi() {
-        val bg = 0xF01E1E1E.toInt()
-
         urlInput = EditText(this).apply {
             setSingleLine()
             hint = "網址 / 關鍵字(yt 開頭 = 搜尋 YouTube)"
             // 深色底、白字(原本白底白字,打的字看不到)
-            setBackgroundColor(0xFF3A3A3A.toInt())
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            setTextColor(Color.WHITE)
-            setHintTextColor(0xFF999999.toInt())
+            background = HudFrameDrawable(resources.displayMetrics.density, 7f, padH = 12f, padV = 9f)
+            setTextColor(Hud.TEXT)
+            setHintTextColor(Hud.SUB)
             imeOptions = EditorInfo.IME_ACTION_GO
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSelectAllOnFocus(true)
@@ -259,9 +256,10 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener { showKeyboard() }
             setOnFocusChangeListener { _, has -> if (has) showKeyboard() }
         }
-        starButton = button("★") { showBookmarks() }
+        starButton = iconButton("star", desc = "書籤") { showBookmarks() }
         titleLabel = TextView(this).apply {
-            setTextColor(Color.WHITE)
+            setTextColor(Hud.TEXT)
+            setShadowLayer(8f, 0f, 0f, Hud.LINE)
             textSize = 18f
             setSingleLine()
             gravity = Gravity.CENTER
@@ -269,21 +267,21 @@ class MainActivity : Activity(), SensorEventListener {
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(bg)
-            addView(button("←") { navBack() })
-            addView(button("首頁") { goHome() })
+            background = HudBarDrawable(resources.displayMetrics.density)
+            setPadding(dp(4), dp(2), dp(4), dp(4))
+            addView(iconButton("back", desc = "返回") { navBack() })
+            addView(iconButton("home", desc = "首頁") { goHome() })
             addView(urlInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(titleLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(starButton)
-            addView(button("VR") { setVr(true) })
+            addView(iconButton("vr", desc = "VR") { setVr(true) })
         }
         barButton = Button(this).apply {
             text = "≡"
             textSize = 22f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0x99000000.toInt())
-            alpha = 0.6f
-            setPadding(0, 0, 0, 0)
+            setTextColor(Hud.TEXT)
+            background = HudFrameDrawable(resources.displayMetrics.density, 7f, padH = 0f, padV = 0f)
+            alpha = 0.7f
             setOnClickListener { showBar() }
         }
         overlayHost = FrameLayout(this)
@@ -316,30 +314,44 @@ class MainActivity : Activity(), SensorEventListener {
         overlayHost.visibility = if (v != null) View.VISIBLE else View.GONE
     }
 
-    /** 上方標題列:左邊返回(首頁時是 App 名稱),右邊可放一顆按鈕 */
-    private fun header(title: String, back: Boolean, right: View?): LinearLayout =
+    /** 上方標題列:左邊返回(首頁時是 App 名稱和英文小標),中間裝飾線,右邊可放一顆按鈕 */
+    private fun header(title: String, back: Boolean, right: View?, sub: String? = null): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            if (back) addView(button("← 返回") { goHome() })
-            addView(TextView(context).apply {
-                text = title
-                setTextColor(Color.WHITE)
-                textSize = if (back) 22f else 30f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(dp(12), 0, 0, 0)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            setPadding(dp(18), dp(12), dp(18), dp(4))
+            if (back) addView(iconButton("back", "返回") { goHome() })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, dp(16), 0)
+                addView(TextView(context).apply {
+                    text = title
+                    setTextColor(0xFFD6F2FF.toInt())
+                    textSize = if (back) 24f else 32f
+                    letterSpacing = if (back) 0.1f else 0.2f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setShadowLayer(dp(10).toFloat(), 0f, 0f, Hud.LINE)
+                })
+                if (sub != null) addView(TextView(context).apply {
+                    text = sub
+                    setTextColor(Hud.TAG)
+                    textSize = 11f
+                    letterSpacing = 0.3f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                })
+            })
+            addView(HudLineView(context), LinearLayout.LayoutParams(0, dp(14), 1f).apply { rightMargin = dp(16) })
             if (right != null) addView(right)
         }
 
-    private fun tile(text: String, enabled: Boolean, onClick: () -> Unit) = Button(this).apply {
-        this.text = text
-        textSize = 24f
-        isAllCaps = false
-        setTextColor(if (enabled) Color.WHITE else Color.GRAY)
-        setBackgroundColor(if (enabled) 0xFF2F5A88.toInt() else 0xFF333333.toInt())
-        setOnClickListener { onClick() }
+    /** 首頁的大卡片 */
+    private fun tile(title: String, sub: String, icon: String, tag: String, enabled: Boolean, onClick: () -> Unit) =
+        HudTile(this, title, sub, icon, tag, enabled).apply { setOnClickListener { onClick() } }
+
+    /** 整頁的科幻背景 */
+    private fun hudPage(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = HudScreenDrawable(resources.displayMetrics.density)
     }
 
     private fun versionName(): String = try {
@@ -350,53 +362,72 @@ class MainActivity : Activity(), SensorEventListener {
     private fun buildHome(): View {
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val tiles = listOf(
-            tile("網頁瀏覽", true) { goWeb() },
-            tile("空中遊覽", true) { goFlight() },
-            tile("我的影片", true) { showMyVideos() },
-            tile("編輯旅程\n(即將推出)", false) { toast("編輯旅程還在規劃中,敬請期待") },
+            tile("網頁瀏覽", "YouTube・各種網站", "globe", "01 // WEB", true) { goWeb() },
+            tile("空中遊覽", "3D 地圖飛行・街景散步", "balloon", "02 // FLIGHT", true) { goFlight() },
+            tile("我的影片", "手機裡的 3D / 360 影片", "video", "03 // VIDEO", true) { showMyVideos() },
+            tile("編輯旅程", "即將推出", "pencil", "04 // LOCKED", false) { toast("編輯旅程還在規劃中,敬請期待") },
         )
         for (r in 0 until 2) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (c in 0 until 2) {
                 row.addView(tiles[r * 2 + c], LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                    setMargins(dp(8), dp(8), dp(8), dp(8))
+                    setMargins(dp(6), dp(6), dp(6), dp(6))
                 })
             }
             grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF111111.toInt())
-            addView(header("WebVR", false, button("⚙ 設定") { showSettings() }))
+        return hudPage().apply {
+            addView(header("WebVR", false, iconButton("wrench", "設定") { showSettings() }, "VIRTUAL TRAVEL SYSTEM"))
             addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                setMargins(dp(8), 0, dp(8), dp(8))
+                setMargins(dp(14), 0, dp(14), 0)
             })
-            addView(TextView(context).apply {
-                text = "版本 " + versionName()
-                setTextColor(Color.GRAY)
-                gravity = Gravity.END
-                setPadding(0, 0, dp(16), dp(8))
+            // 最下面:左邊狀態燈,右邊版本
+            addView(FrameLayout(context).apply {
+                setPadding(dp(24), dp(2), dp(24), dp(12))
+                addView(TextView(context).apply {
+                    text = android.text.SpannableString("●  SYSTEM ONLINE").apply {
+                        setSpan(android.text.style.ForegroundColorSpan(Hud.GREEN), 0, 1, 0)
+                    }
+                    setTextColor(0xFF4F8FC6.toInt())
+                    textSize = 11f
+                    letterSpacing = 0.2f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START))
+                addView(TextView(context).apply {
+                    text = "VER " + versionName()
+                    setTextColor(0xFF4F8FC6.toInt())
+                    textSize = 11f
+                    letterSpacing = 0.2f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END))
             })
         }
     }
 
     private fun settingRow(text: String, onClick: () -> Unit) = Button(this).apply {
         this.text = text
-        textSize = 18f
+        textSize = 19f
         isAllCaps = false
         gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        setTextColor(Hud.TEXT)
+        background = HudFrameDrawable(resources.displayMetrics.density, 10f, padH = 20f, padV = 14f)
+        stateListAnimator = null
         setOnClickListener { onClick() }
     }
+
+    /** 設定頁的一列(上下留空隙) */
+    private fun LinearLayout.addRow(v: View) = addView(v, LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(5), 0, dp(5)) })
 
     /** 設定頁(以後的設定都放這裡) */
     private fun showSettings() {
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, dp(16), dp(16))
-            addView(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
-            addView(settingRow("Google 金鑰(空中遊覽):" +
+            addRow(settingRow("畫質:" + QUALITY_NAMES[quality]) { chooseQuality() })
+            addRow(settingRow("Google 金鑰(空中遊覽):" +
                     if (prefs.getString("mapsKey", "").isNullOrBlank()) "未設定" else "已設定") { askMapsKey() })
-            addView(settingRow("拍盒子兩下點選的靈敏度:" + KNOCK_NAMES[prefs.getInt("knock", 1).coerceIn(0, 2)]) {
+            addRow(settingRow("拍盒子兩下點選的靈敏度:" + KNOCK_NAMES[prefs.getInt("knock", 1).coerceIn(0, 2)]) {
                 val dlg = AlertDialog.Builder(this@MainActivity)
                     .setTitle("拍盒子兩下(VR 中代替點選)")
                     .setSingleChoiceItems(KNOCK_NAMES, prefs.getInt("knock", 1).coerceIn(0, 2)) { d, i ->
@@ -409,16 +440,14 @@ class MainActivity : Activity(), SensorEventListener {
                 dlg.setOnDismissListener { hideSystemBars() }
                 dlg.show()
             })
-            addView(settingRow("Google 金鑰申請、帳單與用量上限教學") { showKeyHelp() })
+            addRow(settingRow("Google 金鑰申請、帳單與用量上限教學") { showKeyHelp() })
             val crashes = if (crashFile.exists()) crashFile.readText().split("\n【").count { it.isNotBlank() } else 0
-            addView(settingRow("閃退紀錄:" + if (crashes == 0) "沒有" else "$crashes 筆") { showCrashLog() })
-            addView(settingRow("檢查更新(目前版本 ${versionName()})") {
+            addRow(settingRow("閃退紀錄:" + if (crashes == 0) "沒有" else "$crashes 筆") { showCrashLog() })
+            addRow(settingRow("檢查更新(目前版本 ${versionName()})") {
                 Updater(this@MainActivity) { hideSystemBars() }.check(manual = true)
             })
         }
-        showOverlay(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF111111.toInt())
+        showOverlay(hudPage().apply {
             addView(header("設定", true, null))
             addView(ScrollView(context).apply { addView(list) },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -491,10 +520,18 @@ class MainActivity : Activity(), SensorEventListener {
                 items.map { it.second }) {
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
                     (super.getView(position, convertView, parent) as TextView).apply {
-                        setTextColor(Color.WHITE)
-                        textSize = 18f
+                        setTextColor(Hud.TEXT)
+                        textSize = 19f
+                        background = HudFrameDrawable(resources.displayMetrics.density, 10f, padH = 20f, padV = 14f)
+                        setCompoundDrawables(HudIconDrawable("video", dp(26)), null, null, null)
+                        compoundDrawablePadding = dp(14)
                     }
             }
+            divider = null
+            dividerHeight = dp(10)
+            selector = android.graphics.drawable.ColorDrawable(0)
+            setPadding(dp(16), dp(6), dp(16), dp(16))
+            clipToPadding = false
             setOnItemClickListener { _, _, i, _ -> playVideo(Uri.parse(items[i].first), items[i].second) }
             setOnItemLongClickListener { _, _, i, _ ->
                 val dlg = AlertDialog.Builder(context)
@@ -516,13 +553,11 @@ class MainActivity : Activity(), SensorEventListener {
                 true
             }
         }
-        showOverlay(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF111111.toInt())
-            addView(header("我的影片", true, button("＋ 加入影片") { pickVideos() }))
+        showOverlay(hudPage().apply {
+            addView(header("我的影片", true, iconButton("plus", "加入影片") { pickVideos() }))
             if (items.isEmpty()) addView(TextView(context).apply {
                 text = "還沒有影片\n按右上角「＋ 加入影片」從手機選擇\n(左右3D、VR180、360 影片進 VR 會自動判斷格式)"
-                setTextColor(Color.GRAY)
+                setTextColor(Hud.SUB)
                 textSize = 18f
                 gravity = Gravity.CENTER
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -723,8 +758,24 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
         this.text = text
+        isAllCaps = false
+        textSize = 17f
+        setTextColor(Hud.TEXT)
+        setShadowLayer(6f, 0f, 0f, Hud.LINE)
+        background = HudFrameDrawable(resources.displayMetrics.density, 8f)
+        stateListAnimator = null
+        minWidth = dp(52)
+        minimumWidth = dp(52)
         setOnClickListener { onClick() }
     }
+
+    /** 科幻風格的小按鈕:線條圖示(+ 文字) */
+    private fun iconButton(icon: String, text: String = "", desc: String = text, onClick: () -> Unit) =
+        button(text, onClick).apply {
+            setCompoundDrawables(HudIconDrawable(icon, dp(24)), null, null, null)
+            compoundDrawablePadding = if (text.isEmpty()) 0 else dp(8)
+            contentDescription = desc
+        }
 
     // ---------------- 各模式設定(VR 面板的「設定」頁用 − / + 調整) ----------------
 
@@ -742,7 +793,7 @@ class MainActivity : Activity(), SensorEventListener {
         Setting("depth", "面板距離", 0.005f, -0.1f, 0.1f, "%+.3f", { prefs.getFloat("panelDepth", 0f) }) { renderer.panelDepth = it },
     ) }
 
-    // 曲面巨幕的設定(2D曲面;左右3D 也放在一般設定下面)
+    // 曲面巨幕的設定(電影院;左右3D 也放在一般設定下面)
     private fun curveExtra(minArc: Float, defArc: Float) = listOf(
         Setting("arc", "曲面弧度", 10f, minArc, 180f, "%.0f度", { defArc }) { renderer.curve = it; redraw() },
         Setting("csize", "曲面大小", 0.1f, 1f, 4.5f, "%.1f倍", { 1.8f }) { renderer.curveSize = it; redraw() },
